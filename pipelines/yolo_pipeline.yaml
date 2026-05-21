@@ -1,0 +1,13 @@
+steps:
+  - step: Segmentation
+    settings:
+      model: YOLO
+      model_settings:
+        model: Riksarkivet/yolov9-lines-within-regions-1
+        device: cpu
+      generation_settings:
+        batch_size: 1
+  - step: Export
+    settings:
+      format: page
+      dest: outputs/htrflow_yolo_page

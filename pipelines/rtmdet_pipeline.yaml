@@ -1,0 +1,13 @@
+steps:
+  - step: Segmentation
+    settings:
+      model: RTMDet
+      model_settings:
+        model: Riksarkivet/rtmdet_lines
+        device: cpu
+      generation_settings:
+        batch_size: 1
+  - step: Export
+    settings:
+      format: page
+      dest: outputs/htrflow_rtmdet_page
