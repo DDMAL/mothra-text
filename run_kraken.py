@@ -12,9 +12,19 @@ import cv2
 import numpy as np
 from PIL import Image
 
+
+def _pdf_to_bgr(path):
+    import fitz
+    doc = fitz.open(path)
+    pix = doc[0].get_pixmap(dpi=300)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8)
+    arr = arr.reshape(pix.height, pix.width, pix.n)
+    code = cv2.COLOR_RGB2BGR if pix.n == 3 else cv2.COLOR_RGBA2BGR
+    return cv2.cvtColor(arr, code)
+
 FOLIO_DIR = os.path.join(os.path.dirname(__file__), "data", "folios")
 OUT_DIR = os.path.join(os.path.dirname(__file__), "outputs", "kraken_blla")
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".pdf"}
 
 BASELINE_COLOUR = (0, 140, 255)   # orange (BGR)
 POLYGON_COLOUR = (180, 60, 255)   # purple (BGR)
@@ -79,16 +89,18 @@ def main():
             continue
         print(f"  {stem} ...", end=" ", flush=True)
 
-        pil_img = Image.open(path).convert("RGB")
+        if os.path.splitext(path)[1].lower() == ".pdf":
+            cv_img = _pdf_to_bgr(path)
+            pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+        else:
+            pil_img = Image.open(path).convert("RGB")
+            cv_img = cv2.imread(path)
+            if cv_img is None:
+                arr = np.array(pil_img)
+                cv_img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
         segmentation = blla.segment(pil_img, device="cpu")
-
         n_lines = len(segmentation.lines)
-
-        cv_img = cv2.imread(path)
-        if cv_img is None:
-            # Fallback for PIL-only formats
-            arr = np.array(pil_img)
-            cv_img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
         annotated = draw_kraken_result(cv_img, segmentation)
 

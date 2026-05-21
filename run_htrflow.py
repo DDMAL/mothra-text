@@ -9,15 +9,26 @@ import os
 import sys
 
 import cv2
+import numpy as np
 
 FOLIO_DIR = os.path.join(os.path.dirname(__file__), "data", "folios")
 OUT_DIR = os.path.join(os.path.dirname(__file__), "outputs")
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".pdf"}
 
 # Colours (BGR)
 YOLO_COLOUR = (0, 200, 50)    # green
 RTMDET_COLOUR = (255, 80, 0)  # blue-orange
+
+
+def _pdf_to_bgr(path):
+    import fitz
+    doc = fitz.open(path)
+    pix = doc[0].get_pixmap(dpi=300)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8)
+    arr = arr.reshape(pix.height, pix.width, pix.n)
+    code = cv2.COLOR_RGB2BGR if pix.n == 3 else cv2.COLOR_RGBA2BGR
+    return cv2.cvtColor(arr, code)
 
 
 def load_images(folder):
@@ -29,7 +40,10 @@ def load_images(folder):
         sys.exit(f"No images found in {folder}")
     images = []
     for p in paths:
-        img = cv2.imread(p)
+        if os.path.splitext(p)[1].lower() == ".pdf":
+            img = _pdf_to_bgr(p)
+        else:
+            img = cv2.imread(p)
         if img is None:
             print(f"  Warning: could not read {p}, skipping")
             continue
