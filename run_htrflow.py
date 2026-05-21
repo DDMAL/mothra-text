@@ -70,6 +70,10 @@ def run_yolo(images, out_dir):
 
     for path, img in images:
         stem = os.path.splitext(os.path.basename(path))[0]
+        out_path = os.path.join(out_dir, f"{stem}_yolo.jpg")
+        if os.path.exists(out_path):
+            print(f"  {stem} ... skipped (output exists)")
+            continue
         print(f"  {stem} ...", end=" ", flush=True)
 
         results = list(model.predict([img]))
@@ -78,7 +82,6 @@ def run_yolo(images, out_dir):
         n = len(result.segments)
         annotated = draw_segments(img, result, YOLO_COLOUR)
 
-        out_path = os.path.join(out_dir, f"{stem}_yolo.jpg")
         cv2.imwrite(out_path, annotated)
         print(f"{n} lines  →  {os.path.relpath(out_path)}")
 
@@ -123,6 +126,10 @@ def run_rtmdet(images, out_dir):
 
     for path, img in images:
         stem = os.path.splitext(os.path.basename(path))[0]
+        out_path = os.path.join(out_dir, f"{stem}_rtmdet.jpg")
+        if os.path.exists(out_path):
+            print(f"  {stem} ... skipped (output exists)")
+            continue
         print(f"  {stem} ...", end=" ", flush=True)
 
         results = list(model.predict([img]))
@@ -131,7 +138,6 @@ def run_rtmdet(images, out_dir):
         n = len(result.segments)
         annotated = draw_segments(img, result, RTMDET_COLOUR)
 
-        out_path = os.path.join(out_dir, f"{stem}_rtmdet.jpg")
         cv2.imwrite(out_path, annotated)
         print(f"{n} lines  →  {os.path.relpath(out_path)}")
 

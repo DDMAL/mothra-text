@@ -73,6 +73,10 @@ def main():
 
     for path in paths:
         stem = os.path.splitext(os.path.basename(path))[0]
+        out_path = os.path.join(OUT_DIR, f"{stem}_kraken.jpg")
+        if os.path.exists(out_path):
+            print(f"  {stem} ... skipped (output exists)")
+            continue
         print(f"  {stem} ...", end=" ", flush=True)
 
         pil_img = Image.open(path).convert("RGB")
@@ -88,7 +92,6 @@ def main():
 
         annotated = draw_kraken_result(cv_img, segmentation)
 
-        out_path = os.path.join(OUT_DIR, f"{stem}_kraken.jpg")
         cv2.imwrite(out_path, annotated)
         print(f"{n_lines} lines  →  {os.path.relpath(out_path)}")
 
