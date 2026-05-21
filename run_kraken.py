@@ -1,13 +1,17 @@
 """
 Run Kraken's BLLA baseline segmenter against folio images and save
 visualised outputs (baselines + bounding polygons drawn on originals)
-to outputs/kraken_blla/.
+to outputs/kraken_blla/, plus segmentation JSON to
+outputs/kraken_blla/segmentation/{stem}_kraken.json for use by
+mothra-evaluator.
 """
 
 import argparse
 import glob
+import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import cv2
 import numpy as np
@@ -88,10 +92,14 @@ def main():
     print(f"Found {len(paths)} image(s)")
     print(f"Output → {out_dir}\n")
 
+    seg_dir = os.path.join(out_dir, "segmentation")
+    os.makedirs(seg_dir, exist_ok=True)
+
     for path in paths:
         stem = os.path.splitext(os.path.basename(path))[0]
         out_path = os.path.join(out_dir, f"{stem}_kraken.jpg")
-        if os.path.exists(out_path):
+        json_path = os.path.join(seg_dir, f"{stem}_kraken.json")
+        if os.path.exists(out_path) and os.path.exists(json_path):
             print(f"  {stem} ... skipped (output exists)")
             continue
         print(f"  {stem} ...", end=" ", flush=True)
@@ -109,9 +117,31 @@ def main():
         segmentation = blla.segment(pil_img, device="cpu")
         n_lines = len(segmentation.lines)
 
-        annotated = draw_kraken_result(cv_img, segmentation)
+        if not os.path.exists(out_path):
+            annotated = draw_kraken_result(cv_img, segmentation)
+            cv2.imwrite(out_path, annotated)
 
-        cv2.imwrite(out_path, annotated)
+        # Save segmentation JSON for mothra-evaluator
+        h, w = cv_img.shape[:2]
+        seg_data = {
+            "folio": stem,
+            "source": os.path.relpath(path, os.path.dirname(out_dir)),
+            "image_width": w,
+            "image_height": h,
+            "model_name": "kraken_blla",
+            "run_date": datetime.now(timezone.utc).isoformat(),
+            "lines": [
+                {
+                    "id": i,
+                    "baseline": [list(pt) for pt in line.baseline] if line.baseline else None,
+                    "boundary": [list(pt) for pt in line.boundary] if line.boundary else None,
+                }
+                for i, line in enumerate(segmentation.lines)
+            ],
+        }
+        with open(json_path, "w") as f:
+            json.dump(seg_data, f)
+
         print(f"{n_lines} lines  →  {os.path.relpath(out_path)}")
 
     print("\nKraken BLLA done.")
