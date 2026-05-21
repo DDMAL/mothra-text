@@ -164,6 +164,7 @@ def main():
         "--model", choices=["yolo", "rtmdet", "both"], default="both"
     )
     parser.add_argument("--folios", default=FOLIO_DIR)
+    parser.add_argument("--output", default=OUT_DIR)
     args = parser.parse_args()
 
     print(f"Loading images from {args.folios}")
@@ -172,10 +173,10 @@ def main():
     print(f"Found {len(images)} image(s): {names}")
 
     if args.model in ("yolo", "both"):
-        run_yolo(images, os.path.join(OUT_DIR, "htrflow_yolo"))
+        run_yolo(images, os.path.join(args.output, "htrflow_yolo"))
 
     if args.model in ("rtmdet", "both"):
-        run_rtmdet(images, os.path.join(OUT_DIR, "htrflow_rtmdet"))
+        run_rtmdet(images, os.path.join(args.output, "htrflow_rtmdet"))
 
 
 if __name__ == "__main__":

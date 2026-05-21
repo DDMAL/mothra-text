@@ -60,15 +60,28 @@ pip install mmdet==3.1.0 mmocr==1.0.1
 ### Running
 
 ```bash
-# Run both htrflow models (downloads weights on first run)
-python run_htrflow.py
+# Run all three models (images from data/folios/, outputs to outputs/)
+python run_all.py
 
-# Run only one model
-python run_htrflow.py --model yolo
-python run_htrflow.py --model rtmdet
+# Use your own image directory (outputs still go to the repo's outputs/)
+python run_all.py --folios /path/to/your/images
 
-# Run Kraken BLLA
-python run_kraken.py
+# Use your own image and output directories (nothing written to the repo)
+python run_all.py --folios /path/to/your/images --output /path/to/your/outputs
 ```
 
-Annotated output images are written to `outputs/`.
+Output subfolders are created automatically:
+- `<output>/htrflow_yolo/`
+- `<output>/htrflow_rtmdet/`
+- `<output>/kraken_blla/`
+
+Already-processed images are skipped on re-runs.
+
+The individual scripts also accept the same flags and can be run separately:
+
+```bash
+python run_htrflow.py --model yolo
+python run_htrflow.py --model rtmdet
+python run_kraken.py
+# all accept --folios and --output
+```

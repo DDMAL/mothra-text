@@ -4,6 +4,7 @@ visualised outputs (baselines + bounding polygons drawn on originals)
 to outputs/kraken_blla/.
 """
 
+import argparse
 import glob
 import os
 import sys
@@ -76,14 +77,20 @@ def draw_kraken_result(cv_img, segmentation):
 def main():
     from kraken import blla
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    paths = load_images(FOLIO_DIR)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--folios", default=FOLIO_DIR)
+    parser.add_argument("--output", default=os.path.dirname(OUT_DIR))
+    args = parser.parse_args()
+
+    out_dir = os.path.join(args.output, "kraken_blla")
+    os.makedirs(out_dir, exist_ok=True)
+    paths = load_images(args.folios)
     print(f"Found {len(paths)} image(s)")
-    print(f"Output → {OUT_DIR}\n")
+    print(f"Output → {out_dir}\n")
 
     for path in paths:
         stem = os.path.splitext(os.path.basename(path))[0]
-        out_path = os.path.join(OUT_DIR, f"{stem}_kraken.jpg")
+        out_path = os.path.join(out_dir, f"{stem}_kraken.jpg")
         if os.path.exists(out_path):
             print(f"  {stem} ... skipped (output exists)")
             continue
