@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# PyLaia experiment — crops are large and reproducible; results.csv is committed
+outputs/pylaia_baseline/crops/
