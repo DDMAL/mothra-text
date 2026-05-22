@@ -1,4 +1,4 @@
-"""Run all three stages of the PyLaia baseline experiment in sequence."""
+"""Run all three stages of the PyLaia himanis experiment in sequence."""
 
 import os
 import subprocess
@@ -6,10 +6,11 @@ import sys
 
 PYTHON = sys.executable
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_BASELINE_DIR = os.path.join(_HERE, "..")
 
 STAGES = [
-    os.path.join(_HERE, "01_segment.py"),
-    os.path.join(_HERE, "02_extract_crops.py"),
+    os.path.join(_BASELINE_DIR, "01_segment.py"),
+    os.path.join(_BASELINE_DIR, "02_extract_crops.py"),
     os.path.join(_HERE, "03_run_pylaia.py"),
 ]
 

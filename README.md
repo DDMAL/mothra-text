@@ -17,14 +17,34 @@ Three models compared head-to-head on a set of medieval manuscript folio images:
 ```
 mothra-text/
 ├── data/
-│   └── folios/          # original manuscript folio images
+│   └── folios/                  # original manuscript folio images
+├── experiments/
+│   └── pylaia_baseline/         # zero-shot HTR baselines (multiple models)
+│       ├── 01_segment.py        # shared: Kraken BLLA → line coord JSON + visualisation
+│       ├── 02_extract_crops.py  # shared: JSON → 128px-high grayscale line crop PNGs
+│       ├── folios.txt           # shared: list of folios used in all sub-experiments
+│       ├── README.md            # index of all sub-experiments
+│       ├── pylaia_home_alcar/   # Teklia/pylaia-home-alcar (Latin medieval)
+│       │   ├── 03_run_pylaia.py
+│       │   ├── run_experiment.py
+│       │   └── README.md
+│       └── pylaia_himanis/      # Teklia/pylaia-himanis (French medieval)
+│           ├── 03_run_pylaia.py
+│           ├── run_experiment.py
+│           └── README.md
 ├── outputs/
-│   ├── htrflow_yolo/    # annotated images — YOLO line polygons (green)
-│   ├── htrflow_rtmdet/  # annotated images — RTMDet masks (blue-orange)
-│   └── kraken_blla/     # annotated images — baselines (orange) + polygons (purple)
+│   ├── htrflow_yolo/            # annotated images — YOLO line polygons (green)
+│   ├── htrflow_rtmdet/          # annotated images — RTMDet masks (blue-orange)
+│   ├── kraken_blla/             # annotated images — baselines (orange) + polygons (purple)
+│   └── pylaia_baseline/
+│       ├── segmentation/        # Kraken BLLA line coord JSON per folio (shared)
+│       ├── crops/               # 128px-high grayscale line crop PNGs per folio (shared)
+│       ├── pylaia_home_alcar/   # home-alcar transcriptions + results.csv
+│       └── pylaia_himanis/      # himanis transcriptions + results.csv
 ├── pipelines/
 │   ├── yolo_pipeline.yaml
 │   └── rtmdet_pipeline.yaml
+├── run_all.py           # runs all three segmentation models
 ├── run_htrflow.py       # runs YOLO and/or RTMDet via htrflow Python API
 └── run_kraken.py        # runs Kraken BLLA segmenter
 ```

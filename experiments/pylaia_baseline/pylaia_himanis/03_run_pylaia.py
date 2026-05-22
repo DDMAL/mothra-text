@@ -1,13 +1,16 @@
 """
-Stage 3: Run PyLaia inference on line crops using Teklia/pylaia-home-alcar.
+Stage 3: Run PyLaia inference on line crops using Teklia/pylaia-himanis.
 
 Downloads the model from HuggingFace on first run
 (cached to ~/.cache/huggingface/).
 Calls pylaia-htr-decode-ctc from the separate pylaia-env conda environment.
 
+Crops are read from the shared outputs/pylaia_baseline/crops/ directory
+produced by 02_extract_crops.py (Kraken BLLA segmentation is model-agnostic).
+
 Outputs:
-  outputs/pylaia_baseline/transcriptions/{stem}.txt
-  outputs/pylaia_baseline/results.csv  (folio, line_id, transcription)
+  outputs/pylaia_baseline/pylaia_himanis/transcriptions/{stem}.txt
+  outputs/pylaia_baseline/pylaia_himanis/results.csv  (folio, line_id, transcription)
 """
 
 import csv
@@ -17,13 +20,17 @@ import sys
 import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.join(_HERE, "..", "..")
+_ROOT = os.path.join(_HERE, "..", "..", "..")
 
 CROPS_DIR = os.path.join(_ROOT, "outputs", "pylaia_baseline", "crops")
-TRANS_DIR = os.path.join(_ROOT, "outputs", "pylaia_baseline", "transcriptions")
-RESULTS_CSV = os.path.join(_ROOT, "outputs", "pylaia_baseline", "results.csv")
+TRANS_DIR = os.path.join(
+    _ROOT, "outputs", "pylaia_baseline", "pylaia_himanis", "transcriptions"
+)
+RESULTS_CSV = os.path.join(
+    _ROOT, "outputs", "pylaia_baseline", "pylaia_himanis", "results.csv"
+)
 
-MODEL_ID = "Teklia/pylaia-home-alcar"
+MODEL_ID = "Teklia/pylaia-himanis"
 
 # pylaia lives in a separate conda env to avoid torch version conflicts
 _PYLAIA_ENV = os.path.join(os.path.expanduser("~"), "miniconda3", "envs", "pylaia-env")
@@ -31,7 +38,7 @@ PYLAIA_BIN = os.path.join(_PYLAIA_ENV, "bin", "pylaia-htr-decode-ctc")
 PYLAIA_CREATE_BIN = os.path.join(_PYLAIA_ENV, "bin", "pylaia-htr-create-model")
 
 # Persistent cache for the created model architecture file
-MODEL_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "pylaia-home-alcar")
+MODEL_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "pylaia-himanis")
 
 
 def download_model():
