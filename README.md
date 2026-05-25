@@ -12,12 +12,31 @@ Three models compared head-to-head on a set of medieval manuscript folio images:
 | RTMDet lines | htrflow | `Riksarkivet/rtmdet_lines` |
 | BLLA baseline segmenter | Kraken | (built-in default model) |
 
+### Data
+
+Folio images and model outputs are stored on HuggingFace, not in this repo.
+Pull them locally before running experiments:
+
+```bash
+# Pull folio images → data/folios/
+ddmal-hfsync pull-groundtruth --shared --dir data
+
+# Pull model outputs → outputs/
+ddmal-hfsync pull-runs --project mothra-text --model kraken --dir outputs/kraken_blla
+ddmal-hfsync pull-runs --project mothra-text --model htrflow-yolov9 --dir outputs/htrflow_yolo
+ddmal-hfsync pull-runs --project mothra-text --model htrflow-rtmdet-lines --dir outputs/htrflow_rtmdet
+ddmal-hfsync pull-runs --project mothra-text --model pylaia_baseline --dir outputs/pylaia_baseline
+```
+
+See [DDMAL/ddmal_hfsync](https://github.com/DDMAL/ddmal_hfsync) for setup instructions
+(`~/.hfconfig` must be configured before these commands will work).
+
 ### Repo layout
 
 ```
 mothra-text/
 ├── data/
-│   └── folios/                  # original manuscript folio images
+│   └── folios/                  # manuscript folio images — not in git, pull from HF (see Data above)
 ├── experiments/
 │   └── pylaia_baseline/         # zero-shot HTR baselines (multiple models)
 │       ├── 01_segment.py        # shared: Kraken BLLA → line coord JSON + visualisation
@@ -32,7 +51,7 @@ mothra-text/
 │           ├── 03_run_pylaia.py
 │           ├── run_experiment.py
 │           └── README.md
-├── outputs/
+├── outputs/                         # not in git, pull from HF (see Data above)
 │   ├── htrflow_yolo/            # annotated images — YOLO line polygons (green)
 │   ├── htrflow_rtmdet/          # annotated images — RTMDet masks (blue-orange)
 │   ├── kraken_blla/             # annotated images — baselines (orange) + polygons (purple)
@@ -79,11 +98,14 @@ pip install mmdet==3.1.0 mmocr==1.0.1
 
 ### Running
 
+> **Prerequisites:** `data/folios/` must be populated before running with the defaults.
+> Pull it from HuggingFace first — see the [Data](#data) section above.
+
 ```bash
 # Run all three models (images from data/folios/, outputs to outputs/)
 python run_all.py
 
-# Use your own image directory (outputs still go to the repo's outputs/)
+# Use your own image directory (outputs still go to outputs/)
 python run_all.py --folios /path/to/your/images
 
 # Use your own image and output directories (nothing written to the repo)
