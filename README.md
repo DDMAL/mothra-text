@@ -35,8 +35,6 @@ See [DDMAL/ddmal_hfsync](https://github.com/DDMAL/ddmal_hfsync) for setup instru
 
 ```
 mothra-text/
-├── data/
-│   └── folios/                  # manuscript folio images — not in git, pull from HF (see Data above)
 ├── experiments/
 │   └── pylaia_baseline/         # zero-shot HTR baselines (multiple models)
 │       ├── 01_segment.py        # shared: Kraken BLLA → line coord JSON + visualisation
@@ -51,15 +49,6 @@ mothra-text/
 │           ├── 03_run_pylaia.py
 │           ├── run_experiment.py
 │           └── README.md
-├── outputs/                         # not in git, pull from HF (see Data above)
-│   ├── htrflow_yolo/            # annotated images — YOLO line polygons (green)
-│   ├── htrflow_rtmdet/          # annotated images — RTMDet masks (blue-orange)
-│   ├── kraken_blla/             # annotated images — baselines (orange) + polygons (purple)
-│   └── pylaia_baseline/
-│       ├── segmentation/        # Kraken BLLA line coord JSON per folio (shared)
-│       ├── crops/               # 128px-high grayscale line crop PNGs per folio (shared)
-│       ├── pylaia_home_alcar/   # home-alcar transcriptions + results.csv
-│       └── pylaia_himanis/      # himanis transcriptions + results.csv
 ├── pipelines/
 │   ├── yolo_pipeline.yaml
 │   └── rtmdet_pipeline.yaml
@@ -102,22 +91,28 @@ pip install mmdet==3.1.0 mmocr==1.0.1
 > Pull it from HuggingFace first — see the [Data](#data) section above.
 
 ```bash
-# Run all three models (images from data/folios/, outputs to outputs/)
+# Run all three models — reads from data/folios/, writes to outputs/ (both gitignored; pull from HF first)
 python run_all.py
 
-# Use your own image directory (outputs still go to outputs/)
+# Use a different folio directory
 python run_all.py --folios /path/to/your/images
 
-# Use your own image and output directories (nothing written to the repo)
+# Use a different folio directory and output location
 python run_all.py --folios /path/to/your/images --output /path/to/your/outputs
 ```
 
-Output subfolders are created automatically:
+Output subfolders are created automatically under `--output` (default: `outputs/`):
 - `<output>/htrflow_yolo/`
 - `<output>/htrflow_rtmdet/`
 - `<output>/kraken_blla/`
 
 Already-processed images are skipped on re-runs.
+
+To share results with the lab, push your outputs to HuggingFace when done:
+
+```bash
+ddmal-hfsync push-run --project mothra-text --model <model> --dir outputs/<model_dir> --force
+```
 
 The individual scripts also accept the same flags and can be run separately:
 
