@@ -1,10 +1,13 @@
 # mothra-text
 
-Experiments in automatic text/music line segmentation on medieval manuscript folios.
+Experiments and pipeline components for HTR and HTR-OMR alignment on medieval chant manuscripts.
 
-## Current experiment: line segmentation model comparison
+## Projects
 
-Three models compared head-to-head on a set of medieval manuscript folio images:
+### 1. Line segmentation model comparison
+
+Three line segmentation models compared head-to-head on a set of medieval manuscript folio images.
+See the [Running](#running) section below for how to run them.
 
 | Model | Tool | HuggingFace ID |
 |---|---|---|
@@ -12,7 +15,43 @@ Three models compared head-to-head on a set of medieval manuscript folio images:
 | RTMDet lines | htrflow | `Riksarkivet/rtmdet_lines` |
 | BLLA baseline segmenter | Kraken | (built-in default model) |
 
-### Data
+### 2. PyLaia HTR baselines
+
+Zero-shot HTR on a 4-folio subset using two PyLaia models trained on medieval Latin manuscripts
+(Teklia/pylaia-home-alcar and Teklia/pylaia-himanis). See `experiments/pylaia_baseline/`.
+
+### 3. Ground-truth-aware word segmentation
+
+A custom HTRflow pipeline step (`steps/`) that substitutes Cantus ground-truth text for the
+recognised transcription when computing word boundaries, so downstream syllable segmentation
+and neume alignment use authoritative text rather than error-prone HTR output.
+See [`steps/README.md`](steps/README.md).
+
+---
+
+## Repo layout
+
+```
+mothra-text/
+├── data/folios/                    # manuscript folio images (HuggingFace)
+├── experiments/
+│   └── pylaia_baseline/            # zero-shot HTR baselines — see README inside
+├── pipelines/                      # htrflow YAML configs for line-seg models
+├── scripts/
+│   └── build_gt_manifest.py        # CLI: build a Cantus gt_lookup manifest
+├── steps/
+│   ├── ground_truth_word_segmentation.py
+│   ├── gt_manifest.py
+│   └── README.md                   # word segmentation project docs
+├── tests/                          # pytest suite for steps/
+├── run_all.py
+├── run_htrflow.py
+└── run_kraken.py
+```
+
+---
+
+## Data
 
 Folio images and model outputs are stored on HuggingFace, not in this repo.
 Pull them locally before running experiments:
@@ -31,33 +70,9 @@ ddmal-hfsync pull-runs --project mothra-text --model pylaia_baseline --dir outpu
 See [DDMAL/ddmal_hfsync](https://github.com/DDMAL/ddmal_hfsync) for setup instructions
 (`~/.hfconfig` must be configured before these commands will work).
 
-### Repo layout
+---
 
-```
-mothra-text/
-├── experiments/
-│   └── pylaia_baseline/         # zero-shot HTR baselines (multiple models)
-│       ├── 01_segment.py        # shared: Kraken BLLA → line coord JSON + visualisation
-│       ├── 02_extract_crops.py  # shared: JSON → 128px-high grayscale line crop PNGs
-│       ├── folios.txt           # shared: list of folios used in all sub-experiments
-│       ├── README.md            # index of all sub-experiments
-│       ├── pylaia_home_alcar/   # Teklia/pylaia-home-alcar (Latin medieval)
-│       │   ├── 03_run_pylaia.py
-│       │   ├── run_experiment.py
-│       │   └── README.md
-│       └── pylaia_himanis/      # Teklia/pylaia-himanis (French medieval)
-│           ├── 03_run_pylaia.py
-│           ├── run_experiment.py
-│           └── README.md
-├── pipelines/
-│   ├── yolo_pipeline.yaml
-│   └── rtmdet_pipeline.yaml
-├── run_all.py           # runs all three segmentation models
-├── run_htrflow.py       # runs YOLO and/or RTMDet via htrflow Python API
-└── run_kraken.py        # runs Kraken BLLA segmenter
-```
-
-### Environment setup
+## Environment setup
 
 ```bash
 conda create -n line-seg-eval python=3.10 -y
@@ -85,7 +100,9 @@ pip install mmdet==3.1.0 mmocr==1.0.1
 > clang++ -dynamiclib -std=c++17 -o /tmp/libmps_stub.dylib /tmp/mps_stub.cpp
 > ```
 
-### Running
+---
+
+## Running
 
 > **Prerequisites:** `data/folios/` must be populated before running with the defaults.
 > Pull it from HuggingFace first — see the [Data](#data) section above.
