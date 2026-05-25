@@ -9,6 +9,8 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
+from steps.gt_manifest import load_manifest, make_manifest_lookup  # noqa: F401 — re-exported for callers
+
 from htrflow.postprocess.word_segmentation import _simple_word_segmentation
 from htrflow.results import Result
 from htrflow.utils.geometry import bbox2mask
