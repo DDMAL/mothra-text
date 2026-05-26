@@ -20,7 +20,16 @@ See the [Running](#running) section below for how to run them.
 Zero-shot HTR on a 4-folio subset using two PyLaia models trained on medieval Latin manuscripts
 (Teklia/pylaia-home-alcar and Teklia/pylaia-himanis). See `experiments/pylaia_baseline/`.
 
-### 3. Ground-truth-aware word segmentation
+### 3. Pipeline Inspector GUI
+
+A browser-based viewer for inspecting pipeline output — folio image overlaid with
+Kraken line polygons and word bounding boxes, with per-layer toggles.
+
+**Live:** https://ddmal.github.io/mothra-text/ — load any folio image + pipeline JSON,
+no install required. See [`gui/README.md`](gui/README.md) for usage and how to generate
+the pipeline JSON with `run_pipeline.py --export-json`.
+
+### 4. Ground-truth-aware word segmentation
 
 A custom HTRflow pipeline step (`steps/`) that substitutes Cantus ground-truth text for the
 recognised transcription when computing word boundaries, so downstream syllable segmentation
@@ -36,6 +45,8 @@ mothra-text/
 ├── data/folios/                    # manuscript folio images (HuggingFace)
 ├── experiments/
 │   └── pylaia_baseline/            # zero-shot HTR baselines — see README inside
+├── gui/                            # Pipeline Inspector browser app (→ ddmal.github.io/mothra-text/)
+│   └── README.md
 ├── pipelines/                      # htrflow YAML configs for line-seg models
 ├── scripts/
 │   └── build_gt_manifest.py        # CLI: build a Cantus gt_lookup manifest
@@ -46,7 +57,8 @@ mothra-text/
 ├── tests/                          # pytest suite for steps/
 ├── run_all.py
 ├── run_htrflow.py
-└── run_kraken.py
+├── run_kraken.py
+└── run_pipeline.py                 # end-to-end pipeline: Kraken → PyLaia → GT word seg
 ```
 
 ---
