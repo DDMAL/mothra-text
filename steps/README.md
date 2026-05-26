@@ -27,6 +27,8 @@ this step produces correct word boundaries for any line where Cantus data is ava
 
 - Builds the `gt_lookup` callable from a Cantus CSV export (no manual annotation needed).
 - Downloads the CSV from `cantusdatabase.org/csv/{source_id}`.
+- Uses `fulltext_ms` (source spelling) as the text source; falls back to
+  `fulltext_standardized` only when the manuscript field is empty.
 - Uses the volpiano column's `7` line-break markers to split each chant's text into
   per-manuscript-line fragments: `7` = line break, `77` = page break, `777` = column
   break, `---` = word boundary. The number of `---`-separated groups between breaks

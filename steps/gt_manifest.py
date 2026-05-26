@@ -174,8 +174,10 @@ def build_page_manifest(
     # Build ordered list of per-line text fragments for the whole folio
     line_texts: list[str] = []
     for row in folio_rows:
+        # Prefer manuscript spelling (source spelling); fall back to
+        # standardized spelling only when the manuscript field is empty.
         raw_text = (
-            row.get("fulltext_standardized") or row.get("fulltext_ms") or ""
+            row.get("fulltext_ms") or row.get("fulltext_standardized") or ""
         ).strip()
         text = clean_text(raw_text)
         if not text:

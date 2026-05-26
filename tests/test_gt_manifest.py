@@ -212,13 +212,25 @@ class TestBuildPageManifest:
         assert manifest["page_region0_line0"] == "alpha beta"
         assert manifest["page_region0_line1"] == "gamma delta"
 
-    def test_falls_back_to_fulltext_ms_when_standardized_absent(self):
+    def test_prefers_fulltext_ms_over_standardized(self):
+        # manuscript spelling takes priority; standardized is the fallback
         rows = [{"folio": "006r", "sequence": "1",
-                 "fulltext_standardized": "", "fulltext_ms": "alpha beta",
+                 "fulltext_standardized": "standardized beta",
+                 "fulltext_ms": "alpha beta",
                  "volpiano": "ab---cd"}]
         labels = ["page_region0_line0"]
         manifest = build_page_manifest(rows, "006r", labels)
         assert manifest["page_region0_line0"] == "alpha beta"
+
+    def test_falls_back_to_standardized_when_ms_absent(self):
+        # fulltext_standardized used only when fulltext_ms is empty
+        rows = [{"folio": "006r", "sequence": "1",
+                 "fulltext_standardized": "standardized beta",
+                 "fulltext_ms": "",
+                 "volpiano": "ab---cd"}]
+        labels = ["page_region0_line0"]
+        manifest = build_page_manifest(rows, "006r", labels)
+        assert manifest["page_region0_line0"] == "standardized beta"
 
 
 # ---------------------------------------------------------------------------
