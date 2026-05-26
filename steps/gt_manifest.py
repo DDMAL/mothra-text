@@ -146,16 +146,21 @@ def build_page_manifest(
     csv_rows: list[dict],
     folio: str,
     node_labels: list[str],
+    line_offset: int = 0,
 ) -> dict[str, str]:
     """Build a node-label → text-fragment mapping for one folio page.
 
     Args:
-        csv_rows:    All rows from a Cantus CSV (any folio); rows for other
-                     folios are ignored.
-        folio:       Folio string exactly as it appears in the Cantus CSV
-                     (e.g. "006r").
-        node_labels: HTRflow node labels for the line nodes on this page, in
-                     any order (sorted internally by reading order).
+        csv_rows:     All rows from a Cantus CSV (any folio); rows for other
+                      folios are ignored.
+        folio:        Folio string exactly as it appears in the Cantus CSV
+                      (e.g. "006r").
+        node_labels:  HTRflow node labels for the line nodes on this page, in
+                      any order (sorted internally by reading order).
+        line_offset:  Number of Cantus line fragments to skip before aligning
+                      with node labels.  Use when the image is a crop that
+                      starts partway through the folio (e.g. line_offset=2
+                      to start alignment at the 3rd Cantus line).
 
     Returns:
         Dict mapping each node label to its Cantus text fragment.  Node
@@ -185,6 +190,13 @@ def build_page_manifest(
         volpiano = (row.get("volpiano") or "").strip()
         fragments = split_by_volpiano(text, volpiano)
         line_texts.extend(fragments)
+
+    if line_offset:
+        logger.info(
+            "Skipping first %d Cantus line(s) for folio %r (line_offset)",
+            line_offset, folio,
+        )
+        line_texts = line_texts[line_offset:]
 
     sorted_labels = sorted(node_labels, key=_label_sort_key)
 

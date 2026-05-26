@@ -3,5 +3,9 @@ __pycache__/
 *.pyo
 .DS_Store
 
-# PyLaia experiment — crops are large and reproducible; results.csv is committed
-outputs/pylaia_baseline/crops/
+# Large binary data — lives in HuggingFace (DDMAL-lab), not GitHub
+outputs/
+data/folios/
+
+# Generated pipeline JSON for the GUI — produced locally by run_pipeline.py
+gui/public/*_pipeline.json

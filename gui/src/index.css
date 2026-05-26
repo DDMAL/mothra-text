@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-gray-50: oklch(98.5% 0.002 247);
+  --color-gray-100: oklch(96% 0.004 247);
+  --color-gray-200: oklch(91% 0.006 247);
+  --color-gray-300: oklch(82% 0.008 247);
+  --color-gray-400: oklch(70% 0.01 247);
+  --color-gray-500: oklch(57% 0.012 247);
+  --color-gray-600: oklch(46% 0.01 247);
+  --color-gray-700: oklch(36% 0.008 247);
+  --color-gray-800: oklch(27% 0.006 247);
+  --color-gray-900: oklch(21% 0.004 247);
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}

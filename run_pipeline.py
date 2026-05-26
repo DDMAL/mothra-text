@@ -22,6 +22,7 @@ add it to the ``_build_remaining_steps`` list below the PyLaia step.
 """
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -49,19 +50,23 @@ def run(
     folio: str,
     pylaia_model: str = "Teklia/pylaia-home-alcar",
     device: str = "cpu",
-) -> Collection:
+    line_offset: int = 0,
+) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
     Args:
-        image_path: Path to the folio JPEG/PNG/TIFF.
-        source_id:  Cantus source ID (integer).
-        folio:      Folio string exactly as it appears in the Cantus CSV.
+        image_path:   Path to the folio JPEG/PNG/TIFF.
+        source_id:    Cantus source ID (integer).
+        folio:        Folio string exactly as it appears in the Cantus CSV.
         pylaia_model: HuggingFace model ID for PyLaia.
-        device:     Kraken inference device (``"cpu"`` or ``"cuda"``).
+        device:       Kraken inference device (``"cpu"`` or ``"cuda"``).
+        line_offset:  Cantus lines to skip before aligning with detected
+                      nodes.  Use when the image is a crop starting partway
+                      through the folio.
 
     Returns:
-        HTRflow Collection with word-level nodes on lines that had
-        Cantus GT text; recognition-output word nodes on lines that did not.
+        Tuple of (collection, manifest) where collection has word-level nodes
+        and manifest is the node-label → Cantus-text mapping used for GT.
     """
     collection = Collection([image_path])
 
@@ -80,7 +85,9 @@ def run(
     node_labels = [node.label for node in collection.active_leaves()]
     logger.info("Stage 3: Fetching Cantus CSV for source %d", source_id)
     csv_rows = fetch_cantus_csv(source_id)
-    manifest = build_page_manifest(csv_rows, folio, node_labels)
+    manifest = build_page_manifest(
+        csv_rows, folio, node_labels, line_offset=line_offset
+    )
     logger.info(
         "  Manifest: %d / %d node labels matched to Cantus text",
         len(manifest),
@@ -97,7 +104,58 @@ def run(
     for step in remaining_steps:
         collection = step.run(collection)
 
-    return collection
+    return collection, manifest
+
+
+def export_json(
+    collection: Collection,
+    image_path: str,
+    manifest: dict[str, str],
+    out_path: str,
+) -> None:
+    """Write line polygons and word bboxes to a GUI-compatible JSON file.
+
+    All coordinates are absolute image pixels.
+
+    Args:
+        collection: Collection after GroundTruthWordSegmentation.
+        image_path: Original folio image path (used for folio name).
+        manifest:   Node-label → Cantus-text mapping; used to tag words
+                    as 'gt' (label in manifest) or 'fallback'.
+        out_path:   Destination path for the JSON file.
+    """
+    page = next(iter(collection))
+    lines = []
+    for line_node in page.children:
+        lbbox = line_node.bbox
+        lpoly = [[pt.x, pt.y] for pt in line_node.polygon.points]
+        words = []
+        for word_node in line_node.children:
+            wbbox = word_node.bbox
+            words.append({
+                "label": word_node.label,
+                "text": word_node.text or "",
+                "bbox": [wbbox.xmin, wbbox.ymin, wbbox.xmax, wbbox.ymax],
+                "source": "gt" if line_node.label in manifest else "fallback",
+            })
+        lines.append({
+            "label": line_node.label,
+            "bbox": [lbbox.xmin, lbbox.ymin, lbbox.xmax, lbbox.ymax],
+            "polygon": lpoly,
+            "text": line_node.text or "",
+            "words": words,
+        })
+
+    img = page.image
+    payload = {
+        "folio": Path(image_path).stem,
+        "image_width": img.shape[1],
+        "image_height": img.shape[0],
+        "lines": lines,
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    logger.info("Exported pipeline JSON to %s", out_path)
 
 
 def _summarise(collection: Collection) -> None:
@@ -127,20 +185,34 @@ def main() -> None:
                         help="HuggingFace PyLaia model ID.")
     parser.add_argument("--device", default="cpu",
                         help="Kraken inference device (default: cpu).")
+    parser.add_argument(
+        "--export-json", metavar="PATH", default=None,
+        help="If given, write pipeline output JSON for the GUI to PATH.",
+    )
+    parser.add_argument(
+        "--line-offset", type=int, default=0, metavar="N",
+        help="Skip the first N Cantus lines before aligning with detected "
+             "nodes. Use when the image is a crop starting partway through "
+             "the folio (default: 0).",
+    )
     args = parser.parse_args()
 
     image_path = str(Path(args.image).expanduser().resolve())
     if not Path(image_path).exists():
         parser.error(f"Image not found: {image_path}")
 
-    collection = run(
+    collection, manifest = run(
         image_path=image_path,
         source_id=args.source_id,
         folio=args.folio,
         pylaia_model=args.pylaia_model,
         device=args.device,
+        line_offset=args.line_offset,
     )
     _summarise(collection)
+
+    if args.export_json:
+        export_json(collection, image_path, manifest, args.export_json)
 
 
 if __name__ == "__main__":
