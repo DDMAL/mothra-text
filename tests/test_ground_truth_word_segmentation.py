@@ -96,12 +96,12 @@ class TestGroundTruthWordSegmentationStep:
 
         fallback = MagicMock()
         with patch(
-            "steps.ground_truth_word_segmentation._simple_word_segmentation",
+            "steps.ground_truth_word_segmentation._fallback_word_segmentation",
             return_value=fallback,
-        ) as mock_simple:
+        ) as mock_fallback:
             step.run(collection)
 
-        mock_simple.assert_called_once_with(node)
+        mock_fallback.assert_called_once_with(node)
         (passed_results,) = collection.update.call_args.args
         assert passed_results == [fallback]
 
@@ -111,7 +111,7 @@ class TestGroundTruthWordSegmentationStep:
         step = GroundTruthWordSegmentation(gt_lookup=lambda _: None)
 
         with patch(
-            "steps.ground_truth_word_segmentation._simple_word_segmentation",
+            "steps.ground_truth_word_segmentation._fallback_word_segmentation",
             return_value=MagicMock(),
         ):
             with caplog.at_level(
@@ -129,9 +129,9 @@ class TestGroundTruthWordSegmentationStep:
 
         fallback = MagicMock()
         with patch(
-            "steps.ground_truth_word_segmentation._simple_word_segmentation",
+            "steps.ground_truth_word_segmentation._fallback_word_segmentation",
             return_value=fallback,
-        ) as mock_simple:
+        ) as mock_fallback:
             step.run(collection)
 
-        mock_simple.assert_called_once_with(node)
+        mock_fallback.assert_called_once_with(node)

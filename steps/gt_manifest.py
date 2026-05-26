@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Uses Any for the node parameter to avoid a hard htrflow import here.
 GroundTruthLookup = Callable[[Any], Optional[str]]
 
-_CANTUS_CSV_URL = "https://cantusdatabase.org/csv/{source_id}"
+_CANTUS_CSV_URL = "https://cantusdatabase.org/source/{source_id}/csv/"
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +190,8 @@ def build_page_manifest(
 
     if len(line_texts) != len(sorted_labels):
         logger.warning(
-            "Cantus line count (%d) differs from node count (%d) for folio %r; "
-            "extra %s will be ignored",
+            "Cantus line count (%d) differs from node count (%d) for folio %r;"
+            " extra %s will be ignored",
             len(line_texts),
             len(sorted_labels),
             folio,

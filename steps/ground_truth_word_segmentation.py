@@ -9,33 +9,62 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
-from steps.gt_manifest import load_manifest, make_manifest_lookup  # noqa: F401 — re-exported for callers
+# noqa: F401 — load_manifest / make_manifest_lookup re-exported for callers
+from steps.gt_manifest import (  # noqa: F401
+    load_manifest,
+    make_manifest_lookup,
+)
 
-from htrflow.postprocess.word_segmentation import _simple_word_segmentation
 from htrflow.results import Result
-from htrflow.utils.geometry import bbox2mask
-from htrflow.utils.imgproc import mask as apply_mask
 from htrflow.volume.volume import Collection, SegmentNode
 
 try:
     from htrflow.pipeline.steps import WordSegmentation as _WordSegmentationBase
 except ImportError:
-    # htrflow.pipeline.steps fails on Apple Silicon because its module-level code
-    # imports RTMDet → mmcv C extension, which has an incompatible symbol with the
-    # installed PyTorch. This stub exposes the same interface so the module and tests
-    # load cleanly in this environment.
+    # htrflow.pipeline.steps fails on Apple Silicon because its module-level
+    # code imports RTMDet → mmcv C extension, which has an incompatible symbol
+    # with the installed PyTorch. This stub exposes the same interface so the
+    # module and tests load cleanly in this environment.
     class _WordSegmentationBase:  # type: ignore[no-redef]
         @classmethod
         def from_config(cls, config):
             return cls(**config)
 
-        def run(self, collection: Collection) -> Collection:  # pragma: no cover
+        def run(  # pragma: no cover
+            self, collection: Collection
+        ) -> Collection:
             raise NotImplementedError
 
 
 logger = logging.getLogger(__name__)
 
 GroundTruthLookup = Callable[[SegmentNode], Optional[str]]
+
+
+def _bbox_word_segmentation(
+    node: SegmentNode,
+    words: list[str],
+    text: str,
+) -> Result:
+    """Divide a line node into per-word bounding boxes by character width.
+
+    Uses pixels-per-character geometry (node.width / len(text)) to allocate
+    horizontal space for each word.  Returns a word-segmentation Result with
+    bbox-based segments (no mask required).
+    """
+    pixels_per_char = node.width // max(len(text), 1)
+    x1, x2 = 0, 0
+    bboxes = []
+    for word in words:
+        x2 = min(x1 + pixels_per_char * (len(word) + 1), node.width)
+        bboxes.append((x1, 0, x2, node.height))
+        x1 = x2
+    return Result.word_segmentation_result(
+        words=words,
+        orig_shape=(node.height, node.width),
+        metadata={},
+        bboxes=bboxes,
+    )
 
 
 def _ground_truth_word_segmentation(
@@ -63,21 +92,20 @@ def _ground_truth_word_segmentation(
     words = gt_text.split()
     if not words:
         return None
-    pixels_per_char = node.width // len(gt_text)
-    x1, x2 = 0, 0
-    bboxes = []
-    for word in words:
-        x2 = min(x1 + pixels_per_char * (len(word) + 1), node.width)
-        bboxes.append((x1, 0, x2, node.height))
-        x1 = x2
-    node_mask = node.mask
-    masks = [apply_mask(node_mask, bbox2mask(bbox, node_mask.shape), fill=0) for bbox in bboxes]
-    return Result.word_segmentation_result(
-        orig_shape=(node.height, node.width),
-        metadata={},
-        masks=masks,
-        words=words,
-    )
+    return _bbox_word_segmentation(node, words, gt_text)
+
+
+def _fallback_word_segmentation(node: SegmentNode) -> Result:
+    """Bbox-based word segmentation from the node's recognised text.
+
+    Drop-in replacement for HTRflow's _simple_word_segmentation that avoids
+    node.mask (which is not a public SegmentNode attribute for Kraken nodes).
+    """
+    text = node.text or ""
+    words = text.split()
+    if not words:
+        words = [text] if text else [""]
+    return _bbox_word_segmentation(node, words, text or " ")
 
 
 class GroundTruthWordSegmentation(_WordSegmentationBase):
@@ -89,8 +117,8 @@ class GroundTruthWordSegmentation(_WordSegmentationBase):
     The pixels-per-character geometry is otherwise unchanged.
 
     When gt_lookup returns None or an empty string for a line, falls back to
-    the standard recognition-based segmentation and logs a warning so the
-    result list always has exactly one entry per active leaf.
+    recognition-based segmentation and logs a warning so the result list
+    always has exactly one entry per active leaf.
 
     Args:
         gt_lookup: Callable mapping a SegmentNode to its expanded Cantus
@@ -110,10 +138,11 @@ class GroundTruthWordSegmentation(_WordSegmentationBase):
             result = _ground_truth_word_segmentation(node, self.gt_lookup)
             if result is None:
                 logger.warning(
-                    "No ground truth available for %s; falling back to recognition output",
+                    "No ground truth for %s; falling back to"
+                    " recognition output",
                     node,
                 )
-                result = _simple_word_segmentation(node)
+                result = _fallback_word_segmentation(node)
             results.append(result)
         collection.update(results)
         return collection
