@@ -56,13 +56,19 @@ class TestSplitByVolpiano:
         result = split_by_volpiano("alpha beta", "ab---cd7")
         assert result == ["alpha beta"]
 
-    def test_leading_clef_character(self):
-        # '9' is a clef/custos in Volpiano; should not add a spurious word
-        result = split_by_volpiano("alleluia", "9---ab")
-        # The '9' group has a non-hyphen character — it counts as a word group.
-        # '9---ab'.split('---') = ['9', 'ab'] → 2 groups → takes 2 words.
-        # But text only has 1 word, so result has 1 element.
-        assert len(result) == 1
+    def test_clef_digits_not_counted_as_word_groups(self):
+        # Volpiano digits (1–9) are clef/custos markers, not note groups.
+        # A leading '1' clef must not steal a word from the text.
+        # '1---ab---cd' has 2 real note groups → 2 words per line.
+        # Without the fix, '1' would count as a 3rd group, shifting
+        # all subsequent line assignments by one word.
+        result = split_by_volpiano("alpha beta gamma delta", "1---ab---cd7ef---gh")
+        assert result == ["alpha beta", "gamma delta"]
+
+    def test_mid_segment_clef_not_counted(self):
+        # Clef changes (3, 4) mid-volpiano segment must also be ignored.
+        result = split_by_volpiano("alpha beta gamma", "ab---3---cd---ef")
+        assert result == ["alpha beta gamma"]
 
     def test_volpiano_shorter_than_text_appends_tail(self):
         # Volpiano covers only 2 words; remaining text appended to last fragment

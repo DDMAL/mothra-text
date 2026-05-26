@@ -82,7 +82,9 @@ def split_by_volpiano(text: str, volpiano: str) -> list[str]:
     for seg in vp_segments:
         # A word group is a stretch between '---' separators that contains at
         # least one non-hyphen character (a real note or clef symbol).
-        word_groups = [g for g in seg.split("---") if re.search(r"[^-]", g)]
+        word_groups = [
+            g for g in seg.split("---") if re.search(r"[a-zA-Z]", g)
+        ]
         n = len(word_groups)
         if n == 0:
             continue
