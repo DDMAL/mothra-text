@@ -82,6 +82,26 @@ class TestSplitByVolpiano:
         assert result[1] == "b c"
         assert result[2] == "d e f"
 
+    def test_mid_word_line_break_does_not_consume_word(self):
+        # '7' falls mid-word: segment 2 starts with '--' (syllable boundary).
+        # 'ab---cd7--ef---gh': seg1 has 2 groups (ab, cd) → 2 words;
+        # seg2 starts mid-word (--ef), so its continuation group is excluded
+        # → seg2 contributes 1 new word (gh).
+        result = split_by_volpiano("alpha beta gamma", "ab---cd7--ef---gh")
+        assert result == ["alpha beta", "gamma"]
+
+    def test_mid_word_line_break_with_clef_digit(self):
+        # '7' followed by a clef digit, then mid-word continuation.
+        # After stripping '1', remainder '--ef---gh' starts with '--' → mid-word.
+        result = split_by_volpiano("alpha beta gamma", "ab---cd71--ef---gh")
+        assert result == ["alpha beta", "gamma"]
+
+    def test_clean_word_break_at_7_not_penalized(self):
+        # '7' at a clean word boundary: segment 2 starts with '---'.
+        # Both segments contribute their full word count.
+        result = split_by_volpiano("alpha beta gamma delta", "ab---cd7---ef---gh")
+        assert result == ["alpha beta", "gamma delta"]
+
 
 # ---------------------------------------------------------------------------
 # clean_text

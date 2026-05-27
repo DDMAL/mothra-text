@@ -58,6 +58,11 @@ def split_by_volpiano(text: str, volpiano: str) -> list[str]:
     the word count for that manuscript line; those words are taken from the
     chant's plain text in order.
 
+    If a segment after a line-break marker begins without a '---' word
+    boundary (i.e. it starts with '--' or directly with notes), its first
+    group is a mid-word continuation of the last word of the previous line
+    and is not counted as a new word for the current line.
+
     If volpiano is absent or empty, returns the full text as a single
     fragment. If text is empty, returns an empty list.
 
@@ -79,7 +84,7 @@ def split_by_volpiano(text: str, volpiano: str) -> list[str]:
     result: list[str] = []
     word_idx = 0
 
-    for seg in vp_segments:
+    for i, seg in enumerate(vp_segments):
         # A word group is a stretch between '---' separators that contains at
         # least one non-hyphen character (a real note or clef symbol).
         word_groups = [
@@ -88,10 +93,25 @@ def split_by_volpiano(text: str, volpiano: str) -> list[str]:
         n = len(word_groups)
         if n == 0:
             continue
-        chunk = words[word_idx:word_idx + n]
+
+        # Detect mid-word continuation: when a line break falls inside a word,
+        # the segment after '7' starts with '--' (syllable boundary) rather
+        # than a note letter (new word) or '---' (word boundary). Strip any
+        # leading clef digit first, then check. The first group is not a new
+        # word — it belongs to the last word of the previous line.
+        seg_stripped = re.sub(r"^[1-9]", "", seg)
+        mid_word_start = (
+            i > 0
+            and bool(re.match(r"--[^-]", seg_stripped))
+        )
+        new_words = n - 1 if mid_word_start else n
+
+        if new_words <= 0:
+            continue
+        chunk = words[word_idx:word_idx + new_words]
         if chunk:
             result.append(" ".join(chunk))
-        word_idx += n
+        word_idx += new_words
 
     # If the volpiano is shorter than the text (e.g. incomplete notation),
     # append any remaining words to the last produced fragment.

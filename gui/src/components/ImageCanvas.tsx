@@ -8,18 +8,14 @@ interface Props {
   layers: Record<LayerKey, boolean>;
 }
 
-// Recompute all polygon/rect points in SVG element space.
-function toSvgPoints(
+function toSvgPointsArray(
   viewer: OpenSeadragon.Viewer,
   imgPoints: [number, number][]
-): string {
-  return imgPoints
-    .map(([x, y]) => {
-      const vp = viewer.viewport.imageToViewportCoordinates(x, y);
-      const el = viewer.viewport.viewportToViewerElementCoordinates(vp);
-      return `${el.x},${el.y}`;
-    })
-    .join(" ");
+): { x: number; y: number }[] {
+  return imgPoints.map(([x, y]) => {
+    const vp = viewer.viewport.imageToViewportCoordinates(x, y);
+    return viewer.viewport.viewportToViewerElementCoordinates(vp);
+  });
 }
 
 function bboxToPoints(bbox: [number, number, number, number]): [number, number][] {
@@ -33,8 +29,20 @@ function bboxToPoints(bbox: [number, number, number, number]): [number, number][
 }
 
 interface SvgState {
-  linePolygons: { key: string; points: string; line: LineEntry }[];
-  wordRects: { key: string; points: string; word: WordEntry; cx: number; cy: number; width: number }[];
+  linePolygons: {
+    key: string;
+    points: string;
+    line: LineEntry;
+  }[];
+  wordRects: {
+    key: string;
+    points: string;
+    word: WordEntry;
+    cx: number;
+    cy: number;
+    width: number;
+    height: number;
+  }[];
 }
 
 export function ImageCanvas({ imageUrl, data, layers }: Props) {
@@ -42,8 +50,8 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
   const viewerRef = useRef<OpenSeadragon.Viewer | null>(null);
   const [svgState, setSvgState] = useState<SvgState>({ linePolygons: [], wordRects: [] });
   const [svgSize, setSvgSize] = useState({ w: 0, h: 0 });
+  const [selectedLineKey, setSelectedLineKey] = useState<string | null>(null);
 
-  // Init OSD viewer
   useEffect(() => {
     if (!containerRef.current) return;
     const viewer = OpenSeadragon({
@@ -60,11 +68,14 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
       if (!el) return;
       setSvgSize({ w: el.clientWidth, h: el.clientHeight });
 
-      const linePolygons = data.lines.map((line) => ({
-        key: line.label,
-        points: toSvgPoints(viewer, line.polygon),
-        line,
-      }));
+      const linePolygons = data.lines.map((line) => {
+        const svgPts = toSvgPointsArray(viewer, line.polygon);
+        return {
+          key: line.label,
+          points: svgPts.map((p) => `${p.x},${p.y}`).join(" "),
+          line,
+        };
+      });
 
       const wordRects = data.lines.flatMap((line) =>
         line.words.map((word) => {
@@ -73,22 +84,18 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
             const vp = viewer.viewport.imageToViewportCoordinates(x, y);
             return viewer.viewport.viewportToViewerElementCoordinates(vp);
           });
-          // top-left and width in element space for label positioning
           const minX = Math.min(...svgPts.map((p) => p.x));
           const minY = Math.min(...svgPts.map((p) => p.y));
           const maxX = Math.max(...svgPts.map((p) => p.x));
-          const w = maxX - minX;
+          const maxY = Math.max(...svgPts.map((p) => p.y));
           return {
             key: word.label,
-            points: pts.map(([x, y]) => {
-              const vp = viewer.viewport.imageToViewportCoordinates(x, y);
-              const el2 = viewer.viewport.viewportToViewerElementCoordinates(vp);
-              return `${el2.x},${el2.y}`;
-            }).join(" "),
+            points: svgPts.map((p) => `${p.x},${p.y}`).join(" "),
             word,
             cx: minX,
             cy: minY,
-            width: w,
+            width: maxX - minX,
+            height: maxY - minY,
           };
         })
       );
@@ -106,6 +113,10 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
     };
   }, [imageUrl, data]);
 
+  const selectedLine = selectedLineKey
+    ? svgState.linePolygons.find((lp) => lp.key === selectedLineKey) ?? null
+    : null;
+
   return (
     <div className="relative flex-1 overflow-hidden bg-gray-900">
       {/* OSD target */}
@@ -117,47 +128,68 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
         width={svgSize.w}
         height={svgSize.h}
       >
-        {/* Line polygons */}
+        {/* Line polygons — click to show words for that line */}
         {layers.lines &&
-          svgState.linePolygons.map(({ key, points, line }) => (
-            <g key={key}>
+          svgState.linePolygons.map(({ key, points, line }) => {
+            const selected = selectedLineKey === key;
+            return (
               <polygon
+                key={key}
                 points={points}
-                fill="rgba(168,85,247,0.10)"
-                stroke="rgb(168,85,247)"
-                strokeWidth={1.5}
+                fill={selected ? "rgba(168,85,247,0.20)" : "rgba(168,85,247,0.10)"}
+                stroke={selected ? "rgb(216,180,254)" : "rgb(168,85,247)"}
+                strokeWidth={selected ? 2 : 1.5}
+                style={{ pointerEvents: "all", cursor: "pointer" }}
+                onClick={() =>
+                  setSelectedLineKey((prev) => (prev === line.label ? null : line.label))
+                }
               />
-              <title>{line.label}</title>
-            </g>
-          ))}
+            );
+          })}
 
-        {/* Word rects */}
+        {/* Word rects — label shown only when screen-space box height >= 20px */}
         {layers.words &&
-          svgState.wordRects.map(({ key, points, word, cy, width }) => (
-            <g key={key} style={{ pointerEvents: "all", cursor: "default" }}>
-              <polygon
-                points={points}
-                fill="rgba(45,212,191,0.10)"
-                stroke="rgb(45,212,191)"
-                strokeWidth={1}
-              />
-              <title>{word.text || "(empty)"}</title>
-              {/* Text label — hidden when rect is too narrow */}
-              {width > 24 && word.text && (
-                <text
-                  x={parseFloat(points.split(" ")[0].split(",")[0]) + 2}
-                  y={cy - 2}
-                  fontSize={9}
-                  fontFamily="ui-monospace, monospace"
-                  fill="rgb(45,212,191)"
-                  style={{ userSelect: "none" }}
-                >
-                  {word.text}
-                </text>
-              )}
-            </g>
-          ))}
+          svgState.wordRects.map(({ key, points, word, cx, cy, width, height }) => {
+            const fs = Math.max(9, Math.round(height * 0.4));
+            return (
+              <g key={key}>
+                <polygon
+                  points={points}
+                  fill="rgba(45,212,191,0.10)"
+                  stroke="rgb(45,212,191)"
+                  strokeWidth={1}
+                />
+                {word.text && word.text.length * fs * 0.4 <= width && (
+                  <text
+                    x={cx + 2}
+                    y={cy - 2}
+                    fontSize={fs}
+                    fontFamily="ui-monospace, monospace"
+                    fill="rgb(45,212,191)"
+                    style={{ userSelect: "none", pointerEvents: "none" }}
+                  >
+                    {word.text}
+                  </text>
+                )}
+              </g>
+            );
+          })}
       </svg>
+
+      {/* Line text panel — shown when a line polygon is clicked */}
+      {selectedLine && (
+        <div className="absolute top-2 right-2 max-w-xs bg-gray-900/95 border border-purple-500 rounded px-3 py-2 text-xs text-purple-200 pointer-events-none z-10">
+          <div className="text-gray-500 font-mono text-[10px] mb-1 leading-none">
+            {selectedLineKey}
+          </div>
+          <div>
+            {selectedLine.line.words
+              .map((w) => w.text)
+              .filter(Boolean)
+              .join(" ") || "(no text)"}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

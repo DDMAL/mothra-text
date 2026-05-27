@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { ImageCanvas } from "./components/ImageCanvas";
 import { TopBar } from "./components/TopBar";
 import { loadPipelineJson } from "./data/loader";
@@ -12,9 +12,6 @@ export default function App() {
     lines: true,
     words: true,
   });
-
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const jsonInputRef = useRef<HTMLInputElement>(null);
 
   const handleToggle = useCallback((key: LayerKey) => {
     setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -89,12 +86,10 @@ export default function App() {
                     ? "bg-gray-700 border-purple-500 text-purple-300"
                     : "bg-gray-700 border-gray-600 text-gray-400 hover:border-gray-500"
                 }`}
-                onClick={() => imageInputRef.current?.click()}
               >
                 <span>{imageUrl ? "Image loaded" : "Choose JPEG / PNG…"}</span>
               </div>
               <input
-                ref={imageInputRef}
                 type="file"
                 accept="image/*"
                 className="hidden"
@@ -113,7 +108,6 @@ export default function App() {
                     ? "bg-gray-700 border-teal-500 text-teal-300"
                     : "bg-gray-700 border-gray-600 text-gray-400 hover:border-gray-500"
                 }`}
-                onClick={() => jsonInputRef.current?.click()}
               >
                 <span>
                   {data
@@ -122,7 +116,6 @@ export default function App() {
                 </span>
               </div>
               <input
-                ref={jsonInputRef}
                 type="file"
                 accept=".json,application/json"
                 className="hidden"
