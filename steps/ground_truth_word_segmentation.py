@@ -52,7 +52,8 @@ def _bbox_word_segmentation(
     horizontal space for each word.  Returns a word-segmentation Result with
     bbox-based segments (no mask required).
     """
-    pixels_per_char = node.width // max(len(text), 1)
+    chars = max(len(text), 1)
+    pixels_per_char = max(1, node.width // chars)
     x1, x2 = 0, 0
     bboxes = []
     for word in words:
