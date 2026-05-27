@@ -259,6 +259,21 @@ class TestBuildPageManifest:
         assert manifest["page_region0_line0"] == "standardized beta"
 
 
+    def test_mode_star_rows_excluded(self):
+        rows = [
+            {"folio": "006r", "sequence": "1", "fulltext_standardized": "alpha beta",
+             "fulltext_ms": "", "volpiano": "ab7cd", "mode": "*"},
+            {"folio": "006r", "sequence": "2", "fulltext_standardized": "gamma delta",
+             "fulltext_ms": "", "volpiano": "ef7gh", "mode": "1"},
+        ]
+        labels = ["page_region0_line0", "page_region0_line1"]
+        manifest = build_page_manifest(rows, "006r", labels)
+        assert manifest == {
+            "page_region0_line0": "gamma",
+            "page_region0_line1": "delta",
+        }
+
+
 # ---------------------------------------------------------------------------
 # make_manifest_lookup
 # ---------------------------------------------------------------------------

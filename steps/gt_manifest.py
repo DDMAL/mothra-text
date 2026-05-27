@@ -190,8 +190,22 @@ def build_page_manifest(
         make_manifest_lookup() callable will return None for them, triggering
         the recognition-output fallback.
     """
-    # Filter to this folio and sort by sequence (chant order on page)
-    folio_rows = [r for r in csv_rows if r.get("folio", "").strip() == folio]
+    # Filter to this folio, excluding rows not physically present (mode="*")
+    folio_rows = [
+        r for r in csv_rows
+        if r.get("folio", "").strip() == folio
+        and r.get("mode", "").strip() != "*"
+    ]
+    excluded = sum(
+        1 for r in csv_rows
+        if r.get("folio", "").strip() == folio
+        and r.get("mode", "").strip() == "*"
+    )
+    if excluded:
+        logger.info(
+            "  Excluded %d mode='*' row(s) for folio %r (not physically present)",
+            excluded, folio,
+        )
     folio_rows.sort(key=lambda r: int(r.get("sequence") or 0))
 
     if not folio_rows:
