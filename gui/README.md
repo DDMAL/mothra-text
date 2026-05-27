@@ -26,6 +26,7 @@ The viewer shows:
 
 ## Generating the pipeline JSON
 
+**From Cantus DB** (fetches the CSV automatically by source ID):
 ```bash
 conda activate line-seg-eval
 python run_pipeline.py \
@@ -34,6 +35,18 @@ python run_pipeline.py \
     --folio "006r" \
     --export-json path/to/output.json
 ```
+
+**From a local CSV** (for manuscripts not in Cantus DB, e.g. Fragmentarium):
+```bash
+conda activate line-seg-eval
+python run_pipeline.py \
+    --image path/to/folio.jpg \
+    --csv path/to/manuscript.csv \
+    --folio "001r" \
+    --export-json path/to/output.json
+```
+
+`--source-id` and `--csv` are mutually exclusive; exactly one is required.
 
 If the image is a crop starting partway through the folio, use `--line-offset N`
 to skip the first N Cantus lines before aligning with detected line nodes:

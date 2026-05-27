@@ -34,6 +34,7 @@ from htrflow.volume.volume import Collection
 from steps.gt_manifest import (
     build_page_manifest,
     fetch_cantus_csv,
+    load_local_csv,
     make_manifest_lookup,
 )
 from steps.ground_truth_word_segmentation import GroundTruthWordSegmentation
@@ -46,8 +47,9 @@ logger = logging.getLogger(__name__)
 
 def run(
     image_path: str,
-    source_id: int,
     folio: str,
+    source_id: int | None = None,
+    csv_path: str | None = None,
     pylaia_model: str = "Teklia/pylaia-home-alcar",
     device: str = "cpu",
     line_offset: int = 0,
@@ -56,8 +58,10 @@ def run(
 
     Args:
         image_path:   Path to the folio JPEG/PNG/TIFF.
-        source_id:    Cantus source ID (integer).
-        folio:        Folio string exactly as it appears in the Cantus CSV.
+        folio:        Folio string exactly as it appears in the CSV.
+        source_id:    Cantus source ID (fetches CSV from cantusdatabase.org).
+        csv_path:     Path to a local Cantus-format CSV (alternative to
+                      source_id).
         pylaia_model: HuggingFace model ID for PyLaia.
         device:       Kraken inference device (``"cpu"`` or ``"cuda"``).
         line_offset:  Cantus lines to skip before aligning with detected
@@ -83,8 +87,12 @@ def run(
     # Build GT manifest from the real node labels produced by Stage 1.
     # Must happen after segmentation so labels are known.
     node_labels = [node.label for node in collection.active_leaves()]
-    logger.info("Stage 3: Fetching Cantus CSV for source %d", source_id)
-    csv_rows = fetch_cantus_csv(source_id)
+    if csv_path:
+        logger.info("Stage 3: Loading local CSV from %s", csv_path)
+        csv_rows = load_local_csv(csv_path)
+    else:
+        logger.info("Stage 3: Fetching Cantus CSV for source %d", source_id)
+        csv_rows = fetch_cantus_csv(source_id)
     manifest = build_page_manifest(
         csv_rows, folio, node_labels, line_offset=line_offset
     )
@@ -176,10 +184,14 @@ def main() -> None:
     )
     parser.add_argument("--image", required=True, metavar="PATH",
                         help="Path to the folio image.")
-    parser.add_argument("--source-id", type=int, required=True, metavar="INT",
-                        help="Cantus source ID.")
     parser.add_argument("--folio", required=True, metavar="STR",
-                        help="Folio string as it appears in the Cantus CSV.")
+                        help="Folio string as it appears in the CSV.")
+    csv_group = parser.add_mutually_exclusive_group(required=True)
+    csv_group.add_argument("--source-id", type=int, metavar="INT",
+                           help="Cantus source ID (fetches CSV from "
+                                "cantusdatabase.org).")
+    csv_group.add_argument("--csv", metavar="PATH",
+                           help="Path to a local Cantus-format CSV file.")
     parser.add_argument("--pylaia-model", default="Teklia/pylaia-home-alcar",
                         metavar="MODEL_ID",
                         help="HuggingFace PyLaia model ID.")
@@ -203,8 +215,9 @@ def main() -> None:
 
     collection, manifest = run(
         image_path=image_path,
-        source_id=args.source_id,
         folio=args.folio,
+        source_id=args.source_id,
+        csv_path=args.csv,
         pylaia_model=args.pylaia_model,
         device=args.device,
         line_offset=args.line_offset,

@@ -269,6 +269,12 @@ def make_manifest_lookup(manifest: dict[str, str]) -> GroundTruthLookup:
     return lambda node: manifest.get(node.label)
 
 
+def load_local_csv(path: str | Path) -> list[dict]:
+    """Load a local Cantus-format CSV file as a list of dicts."""
+    with open(path, encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
 def load_manifest(path: str | Path) -> dict[str, str]:
     """Load a manifest JSON file saved by build_gt_manifest.py."""
     with open(path, encoding="utf-8") as f:
