@@ -29,7 +29,29 @@ Kraken line polygons and word bounding boxes, with per-layer toggles.
 no install required. See [`gui/README.md`](gui/README.md) for usage and how to generate
 the pipeline JSON with `run_pipeline.py --export-json`.
 
-### 4. Ground-truth-aware word segmentation
+### 4. PAGE XML Viewer
+
+A lightweight Python desktop viewer for inspecting PAGE XML annotation files overlaid on
+their source manuscript images. Useful for verifying ground-truth annotations produced by
+`scripts/mothra_to_page.py` or any other PAGE XML source without needing a browser.
+
+**Launch:**
+```bash
+python page_viewer.py                          # open files via dialog
+python page_viewer.py annotation.xml           # load XML, locate image interactively
+python page_viewer.py image.jpg annotation.xml # pre-load both on startup
+```
+
+**Features:**
+- Renders TextRegions, TextLines, Words, Baselines, and Glyphs as colour-coded overlays
+- Per-layer visibility toggles (checkboxes)
+- Scroll-wheel zoom centred on the cursor; click-and-drag pan; Reset View button
+- Click an annotation to select it and see its ID, type, text content, and attributes in the sidebar
+- Hover highlighting — outline thickens when the mouse is over an annotation
+- Graceful handling of missing images: prompts you to locate the file manually
+- No extra dependencies beyond **Pillow** (`pip install pillow`), which is already needed by the other scripts
+
+### 5. Ground-truth-aware word segmentation
 
 A custom HTRflow pipeline step (`steps/`) that substitutes Cantus ground-truth text for the
 recognised transcription when computing word boundaries, so downstream syllable segmentation
@@ -55,6 +77,7 @@ mothra-text/
 │   ├── gt_manifest.py
 │   └── README.md                   # word segmentation project docs
 ├── tests/                          # pytest suite for steps/
+├── page_viewer.py                  # PAGE XML Viewer desktop GUI
 ├── run_all.py
 ├── run_htrflow.py
 ├── run_kraken.py
