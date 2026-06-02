@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PoC pipeline: Kraken BLLA → PyLaia HTR → GT word segmentation.
+"""PoC pipeline: Kraken BLLA → Kraken HTR → GT word segmentation.
 
 Runs a single folio image through the mothra-text proof-of-concept
 pipeline and prints a summary of the resulting word-level nodes.
@@ -18,7 +18,7 @@ in the Cantus CSV (e.g. "002r", not "2r").
 Adding pipeline steps
 ---------------------
 To insert a new step (e.g. SyllableSegmentation) once it is implemented,
-add it to the ``_build_remaining_steps`` list below the PyLaia step.
+add it to the ``_build_remaining_steps`` list below the recognition step.
 """
 
 import argparse
@@ -39,8 +39,8 @@ from steps.gt_manifest import (
     make_manifest_lookup,
 )
 from steps.ground_truth_word_segmentation import GroundTruthWordSegmentation
+from steps.kraken_recognition import KrakenRecognition
 from steps.kraken_segmentation import KrakenSegmentation
-from steps.pylaia_recognition import PyLaiaRecognition
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def run(
     folio: str,
     source_id: int | None = None,
     csv_path: str | None = None,
-    pylaia_model: str = "Teklia/pylaia-home-alcar",
+    recognition_model: str | None = None,
     device: str = "cpu",
     line_offset: int = 0,
     column_variance_threshold: float = 0.5,
@@ -64,7 +64,9 @@ def run(
         source_id:                  Cantus source ID (fetches CSV from cantusdatabase.org).
         csv_path:                   Path to a local Cantus-format CSV (alternative to
                                     source_id).
-        pylaia_model:               HuggingFace model ID for PyLaia.
+        recognition_model:          HuggingFace model ID or local path to a Kraken
+                                    ``.mlmodel`` file.  Pass ``None`` (default) to run
+                                    in stub mode (empty text, pipeline still completes).
         device:                     Kraken inference device (``"cpu"`` or ``"cuda"``).
         line_offset:                Cantus lines to skip before aligning with detected
                                     nodes.  Use when the image is a crop starting partway
@@ -95,16 +97,16 @@ def run(
     )
     logger.info("  %d column(s) detected", column_count)
 
-    # Stage 3: PyLaia text recognition (subprocess into pylaia-env)
-    logger.info("Stage 3: PyLaia text recognition (%s)", pylaia_model)
-    collection = PyLaiaRecognition(model=pylaia_model).run(collection)
+    # Stage 3: Kraken HTR text recognition
+    logger.info("Stage 3: Kraken HTR recognition (model=%r)", recognition_model)
+    collection = KrakenRecognition(model=recognition_model, device=device).run(collection)
 
     # Build GT manifest using column-ordered node labels.
     if csv_path:
-        logger.info("Stage 3: Loading local CSV from %s", csv_path)
+        logger.info("Stage 4: Loading local CSV from %s", csv_path)
         csv_rows = load_local_csv(csv_path)
     else:
-        logger.info("Stage 3: Fetching Cantus CSV for source %d", source_id)
+        logger.info("Stage 4: Fetching Cantus CSV for source %d", source_id)
         csv_rows = fetch_cantus_csv(source_id)
     manifest = build_page_manifest(
         csv_rows, folio, sorted_labels, line_offset=line_offset
@@ -205,9 +207,11 @@ def main() -> None:
                                 "cantusdatabase.org).")
     csv_group.add_argument("--csv", metavar="PATH",
                            help="Path to a local Cantus-format CSV file.")
-    parser.add_argument("--pylaia-model", default="Teklia/pylaia-home-alcar",
-                        metavar="MODEL_ID",
-                        help="HuggingFace PyLaia model ID.")
+    parser.add_argument("--recognition-model", default=None,
+                        metavar="MODEL_ID_OR_PATH",
+                        help="HuggingFace model ID or local path to a Kraken "
+                             ".mlmodel file. Omit to run in stub mode "
+                             "(empty text, pipeline still completes).")
     parser.add_argument("--device", default="cpu",
                         help="Kraken inference device (default: cpu).")
     parser.add_argument(
@@ -237,7 +241,7 @@ def main() -> None:
         folio=args.folio,
         source_id=args.source_id,
         csv_path=args.csv,
-        pylaia_model=args.pylaia_model,
+        recognition_model=args.recognition_model,
         device=args.device,
         line_offset=args.line_offset,
         column_variance_threshold=args.column_variance_threshold,
