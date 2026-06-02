@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htrflow.volume.volume import Collection
 
+from steps.column_clustering import cluster_columns
 from steps.gt_manifest import (
     build_page_manifest,
     fetch_cantus_csv,
@@ -53,20 +54,24 @@ def run(
     pylaia_model: str = "Teklia/pylaia-home-alcar",
     device: str = "cpu",
     line_offset: int = 0,
+    column_variance_threshold: float = 0.5,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
     Args:
-        image_path:   Path to the folio JPEG/PNG/TIFF.
-        folio:        Folio string exactly as it appears in the CSV.
-        source_id:    Cantus source ID (fetches CSV from cantusdatabase.org).
-        csv_path:     Path to a local Cantus-format CSV (alternative to
-                      source_id).
-        pylaia_model: HuggingFace model ID for PyLaia.
-        device:       Kraken inference device (``"cpu"`` or ``"cuda"``).
-        line_offset:  Cantus lines to skip before aligning with detected
-                      nodes.  Use when the image is a crop starting partway
-                      through the folio.
+        image_path:                 Path to the folio JPEG/PNG/TIFF.
+        folio:                      Folio string exactly as it appears in the CSV.
+        source_id:                  Cantus source ID (fetches CSV from cantusdatabase.org).
+        csv_path:                   Path to a local Cantus-format CSV (alternative to
+                                    source_id).
+        pylaia_model:               HuggingFace model ID for PyLaia.
+        device:                     Kraken inference device (``"cpu"`` or ``"cuda"``).
+        line_offset:                Cantus lines to skip before aligning with detected
+                                    nodes.  Use when the image is a crop starting partway
+                                    through the folio.
+        column_variance_threshold:  Minimum fraction of xmin variance explained by the
+                                    two-cluster split for the page to be treated as
+                                    two-column.  See cluster_columns().
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level nodes
@@ -80,13 +85,21 @@ def run(
     n_lines = sum(1 for _ in collection.active_leaves())
     logger.info("  %d line nodes", n_lines)
 
-    # Stage 2: PyLaia text recognition (subprocess into pylaia-env)
-    logger.info("Stage 2: PyLaia text recognition (%s)", pylaia_model)
+    # Stage 2: Column clustering — sort line nodes into reading order
+    logger.info("Stage 2: Column clustering")
+    page = next(iter(collection))
+    sorted_labels, column_count = cluster_columns(
+        line_nodes=list(page.children),
+        page_width=page.image.shape[1],
+        variance_threshold=column_variance_threshold,
+    )
+    logger.info("  %d column(s) detected", column_count)
+
+    # Stage 3: PyLaia text recognition (subprocess into pylaia-env)
+    logger.info("Stage 3: PyLaia text recognition (%s)", pylaia_model)
     collection = PyLaiaRecognition(model=pylaia_model).run(collection)
 
-    # Build GT manifest from the real node labels produced by Stage 1.
-    # Must happen after segmentation so labels are known.
-    node_labels = [node.label for node in collection.active_leaves()]
+    # Build GT manifest using column-ordered node labels.
     if csv_path:
         logger.info("Stage 3: Loading local CSV from %s", csv_path)
         csv_rows = load_local_csv(csv_path)
@@ -94,12 +107,12 @@ def run(
         logger.info("Stage 3: Fetching Cantus CSV for source %d", source_id)
         csv_rows = fetch_cantus_csv(source_id)
     manifest = build_page_manifest(
-        csv_rows, folio, node_labels, line_offset=line_offset
+        csv_rows, folio, sorted_labels, line_offset=line_offset
     )
     logger.info(
         "  Manifest: %d / %d node labels matched to Cantus text",
         len(manifest),
-        len(node_labels),
+        len(sorted_labels),
     )
     gt_lookup = make_manifest_lookup(manifest)
 
@@ -207,6 +220,12 @@ def main() -> None:
              "nodes. Use when the image is a crop starting partway through "
              "the folio (default: 0).",
     )
+    parser.add_argument(
+        "--column-variance-threshold", type=float, default=0.5, metavar="FLOAT",
+        help="Minimum fraction of x-start variance explained by a two-cluster "
+             "split for the page to be treated as two-column. Higher values "
+             "require tighter clusters (default: 0.5).",
+    )
     args = parser.parse_args()
 
     image_path = str(Path(args.image).expanduser().resolve())
@@ -221,6 +240,7 @@ def main() -> None:
         pylaia_model=args.pylaia_model,
         device=args.device,
         line_offset=args.line_offset,
+        column_variance_threshold=args.column_variance_threshold,
     )
     _summarise(collection)
 
