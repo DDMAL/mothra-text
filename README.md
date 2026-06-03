@@ -51,7 +51,41 @@ python page_viewer.py image.jpg annotation.xml # pre-load both on startup
 - Graceful handling of missing images: prompts you to locate the file manually
 - No extra dependencies beyond **Pillow** (`pip install pillow`), which is already needed by the other scripts
 
-### 5. Ground-truth-aware word segmentation
+### 5. End-to-end PoC pipeline
+
+`run_pipeline.py` runs a single folio image through the full pipeline:
+
+1. **Kraken BLLA** — baseline line segmentation
+2. **Column clustering** — auto-detect 1 vs 2 columns; sort lines into reading order
+3. **Co-linear segment fusion** — fuse BLLA sub-segments that belong to the same physical
+   text line (identified by ≥50% y-extent overlap), correcting BLLA over-segmentation on
+   chant manuscripts with neume notation
+4. **Kraken HTR** — text recognition per fused line
+5. **NW chant allocator** — align Cantus CSV text to detected lines via Needleman-Wunsch,
+   using volpiano break markers as alignment anchors; supports folio-to-folio continuation
+   via CSV backward-lookup and optional JSON sidecar (`--folio-state-out`)
+6. **GT word segmentation** — distribute Cantus words across each line's pixel extent
+
+See [`steps/README.md`](steps/README.md) for details on each step.
+
+```bash
+python run_pipeline.py \
+    --image path/to/folio.jpg \
+    --folio "006r" \
+    --source-id 123672 \
+    --recognition-model path/to/model.mlmodel \
+    --export-json output.json \
+    --folio-state-out state.json
+```
+
+Key flags:
+- `--source-id` or `--csv` — Cantus source (fetched or local)
+- `--recognition-model` — Kraken HTR model; omit for stub mode (empty text, pipeline still completes)
+- `--line-offset N` — skip first N Cantus lines (for cropped images)
+- `--prev-folio-state` / `--folio-state-out` — pass post-77 continuation words between folio runs
+- `--export-json` — write output for the Pipeline Inspector GUI
+
+### 6. Ground-truth-aware word segmentation
 
 A custom HTRflow pipeline step (`steps/`) that substitutes Cantus ground-truth text for the
 recognised transcription when computing word boundaries, so downstream syllable segmentation
@@ -73,15 +107,19 @@ mothra-text/
 ├── scripts/
 │   └── build_gt_manifest.py        # CLI: build a Cantus gt_lookup manifest
 ├── steps/
+│   ├── column_clustering.py        # column detection + co-linear segment fusion
 │   ├── ground_truth_word_segmentation.py
 │   ├── gt_manifest.py
-│   └── README.md                   # word segmentation project docs
-├── tests/                          # pytest suite for steps/
+│   ├── kraken_recognition.py       # Kraken HTR step
+│   ├── kraken_segmentation.py      # Kraken BLLA segmentation step
+│   ├── nw_chant_allocator.py       # NW alignment + folio state
+│   └── README.md                   # steps documentation
+├── tests/                          # pytest suite (172 tests)
 ├── page_viewer.py                  # PAGE XML Viewer desktop GUI
 ├── run_all.py
 ├── run_htrflow.py
 ├── run_kraken.py
-└── run_pipeline.py                 # end-to-end pipeline: Kraken → PyLaia → GT word seg
+└── run_pipeline.py                 # end-to-end pipeline: Kraken BLLA → HTR → NW alloc → GT word seg
 ```
 
 ---

@@ -31,9 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htrflow.volume.volume import Collection
 
-from steps.column_clustering import cluster_columns
+from steps.column_clustering import cluster_columns, fuse_colinear_segments
 from steps.gt_manifest import (
-    build_page_manifest,
     fetch_cantus_csv,
     load_local_csv,
     make_manifest_lookup,
@@ -41,9 +40,47 @@ from steps.gt_manifest import (
 from steps.ground_truth_word_segmentation import GroundTruthWordSegmentation
 from steps.kraken_recognition import KrakenRecognition
 from steps.kraken_segmentation import KrakenSegmentation
+from steps.nw_chant_allocator import (
+    FolioState,
+    allocate_lines,
+    build_flat_text_and_anchors,
+    build_folio_state,
+    read_folio_state,
+    write_folio_state,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _defuse_manifest(fused_manifest, fused_lines):
+    """Distribute words from each fused label back to constituent node labels.
+
+    Words are split proportionally by constituent bbox width. The last
+    constituent receives any remainder words to avoid rounding loss.
+    """
+    manifest = {}
+    for fused in fused_lines:
+        text = fused_manifest.get(fused.label, "")
+        words = text.split() if text else []
+        if len(fused.constituent_labels) == 1:
+            manifest[fused.constituent_labels[0]] = text
+        elif not words:
+            for lbl in fused.constituent_labels:
+                manifest[lbl] = ""
+        else:
+            total_w = sum(fused.constituent_widths) or 1
+            idx = 0
+            pairs = zip(fused.constituent_labels, fused.constituent_widths)
+            last = len(fused.constituent_labels) - 1
+            for i, (lbl, w) in enumerate(pairs):
+                if i == last:
+                    manifest[lbl] = " ".join(words[idx:])
+                else:
+                    count = max(0, round(len(words) * w / total_w))
+                    manifest[lbl] = " ".join(words[idx:idx + count])
+                    idx += count
+    return manifest
 
 
 def run(
@@ -55,6 +92,8 @@ def run(
     device: str = "cpu",
     line_offset: int = 0,
     column_variance_threshold: float = 0.5,
+    prev_folio_state: "FolioState | None" = None,
+    folio_state_out: str | None = None,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
@@ -74,6 +113,12 @@ def run(
         column_variance_threshold:  Minimum fraction of xmin variance explained by the
                                     two-cluster split for the page to be treated as
                                     two-column.  See cluster_columns().
+        prev_folio_state:           FolioState from the previous folio run.  When
+                                    provided, its remaining_words (post-77 continuation)
+                                    are prepended to the flat text before alignment.
+        folio_state_out:            If given, write the folio state JSON to this path
+                                    after allocation (for use as prev_folio_state on
+                                    the next folio).
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level nodes
@@ -90,7 +135,7 @@ def run(
     # Stage 2: Column clustering — sort line nodes into reading order
     logger.info("Stage 2: Column clustering")
     page = next(iter(collection))
-    sorted_labels, column_count = cluster_columns(
+    sorted_labels, column_count, split_x = cluster_columns(
         line_nodes=list(page.children),
         page_width=page.image.shape[1],
         variance_threshold=column_variance_threshold,
@@ -101,21 +146,50 @@ def run(
     logger.info("Stage 3: Kraken HTR recognition (model=%r)", recognition_model)
     collection = KrakenRecognition(model=recognition_model, device=device).run(collection)
 
-    # Build GT manifest using column-ordered node labels.
+    # Stage 4: NW chant allocation
     if csv_path:
-        logger.info("Stage 4: Loading local CSV from %s", csv_path)
+        logger.info("Stage 4: NW allocation — loading local CSV from %s", csv_path)
         csv_rows = load_local_csv(csv_path)
     else:
-        logger.info("Stage 4: Fetching Cantus CSV for source %d", source_id)
+        logger.info("Stage 4: NW allocation — fetching Cantus CSV for source %d", source_id)
         csv_rows = fetch_cantus_csv(source_id)
-    manifest = build_page_manifest(
-        csv_rows, folio, sorted_labels, line_offset=line_offset
+    flat_text = build_flat_text_and_anchors(
+        csv_rows, folio, line_offset=line_offset, prev_folio_state=prev_folio_state
     )
+    node_ocr = {node.label: (node.text or "") for node in page.children}
+    fused_lines = fuse_colinear_segments(list(page.children), split_x)
     logger.info(
-        "  Manifest: %d / %d node labels matched to Cantus text",
-        len(manifest),
-        len(sorted_labels),
+        "  Fused %d segments → %d logical lines",
+        sum(len(f.constituent_labels) for f in fused_lines),
+        len(fused_lines),
     )
+    fused_sorted_labels = [f.label for f in fused_lines]
+    fused_ocr_texts = {
+        f.label: " ".join(node_ocr[lbl] for lbl in f.constituent_labels)
+        for f in fused_lines
+    }
+    alloc_result = allocate_lines(
+        flat_text=flat_text,
+        sorted_labels=fused_sorted_labels,
+        ocr_texts=fused_ocr_texts,
+        column_count=column_count,
+    )
+    manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
+    for flag in alloc_result.flags:
+        logger.warning("Validation flag [%s]: %s", flag.flag_type, flag.detail)
+    logger.info(
+        "  Manifest: %d / %d node labels assigned text",
+        sum(1 for v in manifest.values() if v),
+        len(manifest),
+    )
+    if folio_state_out:
+        state = build_folio_state(flat_text, alloc_result, source_id, folio)
+        write_folio_state(state, folio_state_out)
+        logger.info(
+            "Folio state written to %s (fully_consumed=%s)",
+            folio_state_out,
+            state.fully_consumed,
+        )
     gt_lookup = make_manifest_lookup(manifest)
 
     # Remaining steps — add new steps to this list as they are implemented:
@@ -230,11 +304,27 @@ def main() -> None:
              "split for the page to be treated as two-column. Higher values "
              "require tighter clusters (default: 0.5).",
     )
+    parser.add_argument(
+        "--prev-folio-state", metavar="PATH", default=None,
+        help="JSON sidecar from the previous folio run. Provides post-77 "
+             "continuation words for chants that span two folios.",
+    )
+    parser.add_argument(
+        "--folio-state-out", metavar="PATH", default=None,
+        help="Write folio state JSON to PATH after allocation. Pass this "
+             "as --prev-folio-state on the next folio run.",
+    )
     args = parser.parse_args()
 
     image_path = str(Path(args.image).expanduser().resolve())
     if not Path(image_path).exists():
         parser.error(f"Image not found: {image_path}")
+
+    prev_state = (
+        read_folio_state(args.prev_folio_state)
+        if args.prev_folio_state
+        else None
+    )
 
     collection, manifest = run(
         image_path=image_path,
@@ -245,6 +335,8 @@ def main() -> None:
         device=args.device,
         line_offset=args.line_offset,
         column_variance_threshold=args.column_variance_threshold,
+        prev_folio_state=prev_state,
+        folio_state_out=args.folio_state_out,
     )
     _summarise(collection)
 
