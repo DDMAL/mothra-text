@@ -84,6 +84,7 @@ Key flags:
 - `--line-offset N` — skip first N Cantus lines (for cropped images)
 - `--prev-folio-state` / `--folio-state-out` — pass post-77 continuation words between folio runs
 - `--export-json` — write output for the Pipeline Inspector GUI
+- `--debug-ocr` — print per-line OCR transcripts and NW alignment detail to stdout
 
 ### 6. Ground-truth-aware word segmentation
 
@@ -114,7 +115,7 @@ mothra-text/
 │   ├── kraken_segmentation.py      # Kraken BLLA segmentation step
 │   ├── nw_chant_allocator.py       # NW alignment + folio state
 │   └── README.md                   # steps documentation
-├── tests/                          # pytest suite (172 tests)
+├── tests/                          # pytest suite (177 tests)
 ├── page_viewer.py                  # PAGE XML Viewer desktop GUI
 ├── run_all.py
 ├── run_htrflow.py

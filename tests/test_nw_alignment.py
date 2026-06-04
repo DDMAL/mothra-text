@@ -3,8 +3,8 @@
 from steps.nw_chant_allocator import (
     Anchor,
     AllocationResult,
+    ChantSpan,
     FlatTextData,
-    ValidationFlag,
     allocate_lines,
 )
 
@@ -28,18 +28,25 @@ class TestAllocateLinesEmpty:
 
     def test_empty_flat_text_all_labels_get_empty_string(self):
         flat = _flat([])
-        result = allocate_lines(flat, ["line0", "line1"], {"line0": "alleluia", "line1": "dominus"})
+        result = allocate_lines(
+            flat,
+            ["line0", "line1"],
+            {"line0": "alleluia", "line1": "dominus"},
+        )
         assert result.manifest["line0"] == ""
         assert result.manifest["line1"] == ""
 
 
 class TestAllocateLinesStubMode:
     def test_stub_advances_to_next_anchor(self):
-        # Two within_chant_7 anchors; two labels with empty OCR → each advances to next anchor.
+        # Two within_chant_7 anchors; two labels with empty OCR → each
+        # advances to next anchor.
         words = ["a", "b", "c", "d"]
         anchors = [Anchor(2, "within_chant_7"), Anchor(4, "within_chant_7")]
         flat = _flat(words, anchors)
-        result = allocate_lines(flat, ["line0", "line1"], {"line0": "", "line1": ""})
+        result = allocate_lines(
+            flat, ["line0", "line1"], {"line0": "", "line1": ""}
+        )
         assert result.manifest["line0"] == "a b"
         assert result.manifest["line1"] == "c d"
         assert result.text_pointer_end == 4
@@ -83,7 +90,9 @@ class TestAllocateLinesNWMode:
         # flat_text has 100 words; search_window=3 limits candidate to 3.
         words = [f"word{i}" for i in range(100)]
         flat = _flat(words)
-        result = allocate_lines(flat, ["line0"], {"line0": "word0"}, search_window=3)
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "word0"}, search_window=3
+        )
         # best_k is at most 3 due to the search window cap
         assert result.text_pointer_end <= 3
 
@@ -108,20 +117,24 @@ class TestAllocateLinesSnapping:
         words = ["alleluia", "dominus", "laudate", "deum"]
         anchors = [Anchor(2, "within_chant_7")]
         flat = _flat(words, anchors)
-        result = allocate_lines(flat, ["line0"], {"line0": "alleluia"}, snap_window=1)
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "alleluia"}, snap_window=1
+        )
         # Snapped from k=1 to the anchor position of 2.
         assert result.manifest["line0"] == "alleluia dominus"
         assert result.text_pointer_end == 2
 
     def test_no_snap_when_diff_exceeds_window(self):
-        # NW best_k=5, anchor at 2 → diff=3 > snap_window=1 → no snap, flag emitted.
+        # NW best_k=5, anchor at 2 → diff=3 > snap_window=1 → flag emitted.
         words = ["a", "b", "c", "d", "e", "f", "g"]
         anchors = [Anchor(2, "within_chant_7")]
         flat = _flat(words, anchors)
         result = allocate_lines(
             flat, ["line0"], {"line0": "a b c d e"}, snap_window=1
         )
-        assert any(f.flag_type == "nw_volpiano_disagreement" for f in result.flags)
+        assert any(
+            f.flag_type == "nw_volpiano_disagreement" for f in result.flags
+        )
         # pointer advanced by best_k (5), not snapped to anchor (2)
         assert result.text_pointer_end == 5
 
@@ -130,7 +143,9 @@ class TestAllocateLinesSnapping:
         words = ["a", "b", "c"]
         flat = _flat(words)
         result = allocate_lines(flat, ["line0"], {"line0": "a b c"})
-        assert not any(f.flag_type == "nw_volpiano_disagreement" for f in result.flags)
+        assert not any(
+            f.flag_type == "nw_volpiano_disagreement" for f in result.flags
+        )
 
 
 class TestAllocateLinesValidationFlags:
@@ -146,7 +161,9 @@ class TestAllocateLinesValidationFlags:
         words = ["a", "b"]
         flat = _flat(words)
         result = allocate_lines(flat, ["line0"], {"line0": "a b"})
-        assert not any(f.flag_type == "line_count_mismatch" for f in result.flags)
+        assert not any(
+            f.flag_type == "line_count_mismatch" for f in result.flags
+        )
 
     def test_column_count_uncertain_flag_when_no_777_anchor(self):
         # column_count=2, left_column_count=1 but no column_break_777 anchor.
@@ -160,12 +177,14 @@ class TestAllocateLinesValidationFlags:
             column_count=2,
             left_column_count=1,
         )
-        assert any(f.flag_type == "column_count_uncertain" for f in result.flags)
+        assert any(
+            f.flag_type == "column_count_uncertain" for f in result.flags
+        )
 
 
 class TestAllocateLinesColumnBreak:
     def test_column_break_resets_text_pointer(self):
-        # flat_text: left column (words 0-1), column_break at 3, right column (words 3-4).
+        # left column (words 0-1), column_break at 3, right column (words 3-4).
         # Word 2 would be "orphaned" between columns — the hard-reset skips it.
         words = ["l0", "l1", "orphan", "r0", "r1"]
         anchors = [
@@ -183,9 +202,125 @@ class TestAllocateLinesColumnBreak:
         )
         # left_line0: advances to anchor at 2 → consumes "l0 l1"
         assert result.manifest["left_line0"] == "l0 l1"
-        # left_line1: advances to next anchor (column_break at 3) → consumes "orphan"
+        # left_line1: advances to column_break anchor at 3 → consumes "orphan"
         assert result.manifest["left_line1"] == "orphan"
-        # right_line0: hard-reset to column_break.word_index=3, then advances to anchor 5
-        # → consumes "r0 r1"
+        # right_line0: hard-reset to column_break word 3, advances to anchor 5
         assert result.manifest["right_line0"] == "r0 r1"
-        assert not any(f.flag_type == "column_count_uncertain" for f in result.flags)
+        assert not any(
+            f.flag_type == "column_count_uncertain" for f in result.flags
+        )
+
+
+class TestForceWindow:
+    """Tests for the force_window mid-chant snap feature."""
+
+    def _mid_chant_flat(self, words, anchor_word_index):
+        """FlatTextData with one span covering all words and one anchor."""
+        return FlatTextData(
+            words=words,
+            anchors=[Anchor(anchor_word_index, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, len(words))],
+        )
+
+    def test_force_fires_mid_chant(self):
+        # Single span (0-30), pointer=6, anchor=14.
+        # NW best_k=2 → raw_end=8, diff=6 in (snap_window=2, force_window=10].
+        # No new chant starts in (6, 14] → force fires.
+        words = ["a"] * 30
+        flat = FlatTextData(
+            words=words,
+            anchors=[Anchor(14, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, 30)],
+            initial_pointer=6,
+        )
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "a a"},
+            snap_window=2, force_window=10,
+        )
+        assert result.manifest["line0"] == " ".join(["a"] * 8)
+        assert result.text_pointer_end == 14
+        assert any(
+            f.flag_type == "forced_mid_chant_snap" for f in result.flags
+        )
+        assert not any(
+            f.flag_type == "nw_volpiano_disagreement" for f in result.flags
+        )
+
+    def test_force_blocked_when_chant_starts_in_window(self):
+        # Two chants: span A (0-15), span B (15-30).
+        # Pointer=8, anchor=16, diff=6 in force range.
+        # Span B starts at 15, which is in (8, 16] → force must NOT fire.
+        words = ["a"] * 30
+        flat = FlatTextData(
+            words=words,
+            anchors=[Anchor(16, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, 15), ChantSpan(2, 15, 30)],
+            initial_pointer=8,
+        )
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "a a"},
+            snap_window=2, force_window=10,
+        )
+        assert not any(
+            f.flag_type == "forced_mid_chant_snap" for f in result.flags
+        )
+        assert any(
+            f.flag_type == "nw_volpiano_disagreement" for f in result.flags
+        )
+
+    def test_force_not_blocked_at_span_start(self):
+        # Pointer is exactly at a span start (pointer=15=span.start_word).
+        # No new chant starts in (15, 23] → force SHOULD fire.
+        # (Being at a span start means we're at the beginning of a chant,
+        # not mid-transition; the within_chant_7 anchor is within that chant.)
+        words = ["a"] * 30
+        flat = FlatTextData(
+            words=words,
+            anchors=[Anchor(23, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, 15), ChantSpan(2, 15, 30)],
+            initial_pointer=15,
+        )
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "a a"},
+            snap_window=2, force_window=10,
+        )
+        assert any(
+            f.flag_type == "forced_mid_chant_snap" for f in result.flags
+        )
+
+    def test_force_blocked_for_page_break_77(self):
+        # Anchor is page_break_77, not within_chant_7 → force must not fire.
+        words = ["a"] * 20
+        flat = FlatTextData(
+            words=words,
+            anchors=[Anchor(8, "page_break_77")],
+            chant_spans=[ChantSpan(1, 0, 20)],
+        )
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "a a"},
+            snap_window=2, force_window=10,
+        )
+        assert not any(
+            f.flag_type == "forced_mid_chant_snap" for f in result.flags
+        )
+
+    def test_force_window_zero_disables(self):
+        # force_window=0 → feature off; nw_volpiano_disagreement emitted
+        # even when diff is within a non-zero force_window.
+        words = ["a"] * 30
+        flat = FlatTextData(
+            words=words,
+            anchors=[Anchor(14, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, 30)],
+            initial_pointer=6,
+        )
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "a a"},
+            snap_window=2, force_window=0,
+        )
+        assert not any(
+            f.flag_type == "forced_mid_chant_snap" for f in result.flags
+        )
+        assert any(
+            f.flag_type == "nw_volpiano_disagreement" for f in result.flags
+        )

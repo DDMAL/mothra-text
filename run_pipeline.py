@@ -198,6 +198,7 @@ def run(
         ocr_texts=fused_ocr_texts,
         column_count=column_count,
         snap_window=2,
+        force_window=10,  # force within_chant_7 up to ±10 words mid-chant
         debug=debug_ocr,
     )
 
@@ -228,6 +229,7 @@ def run(
                     f"  Anchor:   word {entry['anchor_word']}"
                     f" ({entry['anchor_type']})"
                     f", diff={diff}, snapped={entry['snapped']}"
+                    f", forced={entry['forced']}"
                 )
             if entry['alignment']:
                 print("  Alignment:")
@@ -274,7 +276,7 @@ def export_json(
     manifest: dict[str, str],
     out_path: str,
 ) -> None:
-    """Write line polygons, word bboxes, and syllable bboxes to a GUI-compatible JSON file.
+    """Write line polygons and word bboxes to a GUI-compatible JSON file.
 
     All coordinates are absolute image pixels.
 

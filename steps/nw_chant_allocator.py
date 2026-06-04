@@ -318,6 +318,20 @@ class AllocationResult:
     debug_lines: list[dict] | None = None  # set when debug=True
 
 
+def _chant_starts_in_range(
+    start: int,
+    end: int,
+    chant_spans: list[ChantSpan],
+) -> bool:
+    """Return True if any chant span starts in the interval (start, end].
+
+    Guards force_window: if a new chant begins between text_pointer and
+    the anchor, forcing overrides NW's evidence about which physical line
+    that chant first appears on.
+    """
+    return any(start < span.start_word <= end for span in chant_spans)
+
+
 def allocate_lines(
     flat_text: FlatTextData,
     sorted_labels: list[str],
@@ -326,6 +340,7 @@ def allocate_lines(
     left_column_count: int = 0,
     search_window: int = 40,
     snap_window: int = 1,
+    force_window: int = 0,
     match_score: float = 8.0,
     mismatch_score: float = -5.0,
     open_penalty: float = -7.0,
@@ -360,6 +375,13 @@ def allocate_lines(
                             within this distance of the next volpiano
                             anchor are snapped to it silently; larger
                             differences emit nw_volpiano_disagreement.
+        force_window:       Mid-chant force tolerance in words.  When
+                            > 0, within_chant_7 anchors are forced even
+                            beyond snap_window, unless a new chant span
+                            starts between text_pointer and the anchor
+                            (which would override NW's evidence about
+                            which line that chant appears on).
+                            Set to 0 to disable the feature entirely.
         match_score, mismatch_score, open_penalty, extend_penalty:
                             Bio.Align.PairwiseAligner scoring params.
                             Defaults are calibrated for medieval chant.
@@ -456,6 +478,7 @@ def allocate_lines(
         _dbg_best_norm: float | None = None
         _dbg_next_snap: Anchor | None = None
         _dbg_snapped = False
+        _dbg_forced = False
         _dbg_alignment = ""
 
         if not ocr:
@@ -504,7 +527,25 @@ def allocate_lines(
                             f"Line {label}: snapped to page_break_77 at "
                             f"word {next_snap.word_index} (NW was {raw_end})",
                         ))
-                elif diff > snap_window:
+                elif (
+                    force_window > 0
+                    and diff <= force_window
+                    and next_snap.anchor_type == "within_chant_7"
+                    and not _chant_starts_in_range(
+                        text_pointer,
+                        next_snap.word_index,
+                        flat_text.chant_spans,
+                    )
+                ):
+                    consumed = next_snap.word_index - text_pointer
+                    _dbg_forced = True
+                    flags.append(ValidationFlag(
+                        "forced_mid_chant_snap",
+                        f"Line {label}: forced to within_chant_7 anchor"
+                        f" at word {next_snap.word_index}"
+                        f" (NW was {raw_end}, diff={diff})",
+                    ))
+                else:
                     flag_type = (
                         "page_break_77_mismatch"
                         if next_snap.anchor_type == "page_break_77"
@@ -549,6 +590,7 @@ def allocate_lines(
                     _dbg_next_snap.anchor_type if _dbg_next_snap else None
                 ),
                 "snapped": _dbg_snapped,
+                "forced": _dbg_forced,
                 "alignment": _dbg_alignment,
             })
 

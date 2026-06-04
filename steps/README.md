@@ -119,8 +119,13 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
   chant (match 8, mismatch −5, gap open −7, gap extend −3).
 - Advances a `text_pointer` through `flat_text.words` as each line is processed.
 - Snaps the pointer to the nearest `within_chant_7` or `page_break_77` anchor when NW
-  result is within `snap_window=1` word of it; emits `nw_volpiano_disagreement` flags
-  when the gap exceeds the snap window.
+  result is within `snap_window` words of it (default 2); emits `nw_volpiano_disagreement`
+  flags when the gap exceeds the snap window.
+- **Force-window snap** (`force_window`, default 10): when NW under-consumes due to poor
+  OCR, forces the pointer to a `within_chant_7` anchor even when the gap exceeds
+  `snap_window`, provided no new chant span starts between the current pointer and the
+  anchor (i.e. the line is safely mid-chant). Emits `forced_mid_chant_snap` flags.
+  Set `force_window=0` to disable entirely.
 - Hard-resets the pointer to the nearest `column_break_777` anchor at the start of
   column 2 (when `column_count=2`).
 - Emits `continuation_missing` when the first word of `flat_text` is lowercase and
@@ -162,7 +167,7 @@ conda activate line-seg-eval
 pytest tests/ -v
 ```
 
-172 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
+177 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
 `test_nw_alignment.py`, `test_nw_folio_state.py`, and others.
 
 ---
