@@ -1,8 +1,15 @@
+export interface SyllableEntry {
+  label: string;
+  text: string;
+  bbox: [number, number, number, number]; // xmin, ymin, xmax, ymax — absolute image px
+}
+
 export interface WordEntry {
   label: string;
   text: string;
   bbox: [number, number, number, number]; // xmin, ymin, xmax, ymax — absolute image px
   source: "gt" | "fallback";
+  syllables?: SyllableEntry[];
 }
 
 export interface LineEntry {
@@ -20,4 +27,4 @@ export interface PipelineData {
   lines: LineEntry[];
 }
 
-export type LayerKey = "lines" | "words";
+export type LayerKey = "lines" | "words" | "syllables";

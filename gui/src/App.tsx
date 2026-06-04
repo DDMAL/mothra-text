@@ -11,6 +11,7 @@ export default function App() {
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     lines: true,
     words: true,
+    syllables: true,
   });
 
   const handleToggle = useCallback((key: LayerKey) => {

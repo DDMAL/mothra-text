@@ -8,11 +8,8 @@ with character-proportional bounding-box geometry.
 import logging
 import re
 import unicodedata
-from typing import Optional
 
-from htrflow.results import TEXT_RESULT_KEY, Result
-from htrflow.utils.geometry import bbox2mask
-from htrflow.utils.imgproc import mask as apply_mask
+from htrflow.results import Result
 from htrflow.volume.volume import Collection, SegmentNode
 from volpiano_display_utilities.latin_word_syllabification import (
     LatinError,
@@ -132,15 +129,10 @@ def _syllable_segmentation(node: SegmentNode) -> Result:
         bboxes.append((cursor, 0, x2, node.height))
         cursor = x2
 
-    node_mask = node.mask
-    masks = [
-        apply_mask(node_mask, bbox2mask(bbox, node_mask.shape), fill=0)
-        for bbox in bboxes
-    ]
     return Result.word_segmentation_result(
         orig_shape=(node.height, node.width),
         metadata={},
-        masks=masks,
+        bboxes=bboxes,
         words=syllables,
     )
 

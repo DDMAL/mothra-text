@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PoC pipeline: Kraken BLLA → Kraken HTR → GT word segmentation.
+"""PoC pipeline: Kraken BLLA → Kraken HTR → GT word/syllable segmentation.
 
 Runs a single folio image through the mothra-text proof-of-concept
 pipeline and prints a summary of the resulting word-level nodes.
@@ -14,11 +14,6 @@ python run_pipeline.py \\
 The Cantus source ID is the integer on the source detail page at
 cantusdatabase.org. The folio string must match exactly how it appears
 in the Cantus CSV (e.g. "002r", not "2r").
-
-Adding pipeline steps
----------------------
-To insert a new step (e.g. SyllableSegmentation) once it is implemented,
-add it to the ``_build_remaining_steps`` list below the recognition step.
 """
 
 import argparse
@@ -43,6 +38,7 @@ from steps.gt_manifest import (  # noqa: E402
 from steps.ground_truth_word_segmentation import (  # noqa: E402
     GroundTruthWordSegmentation,
 )
+from steps.syllable_segmentation import SyllableSegmentation  # noqa: E402
 from steps.kraken_recognition import KrakenRecognition  # noqa: E402
 from steps.kraken_segmentation import KrakenSegmentation  # noqa: E402
 from steps.nw_chant_allocator import (  # noqa: E402
@@ -263,7 +259,7 @@ def run(
     # Remaining steps — add new steps to this list as they are implemented:
     remaining_steps = [
         GroundTruthWordSegmentation(gt_lookup=gt_lookup),
-        # SyllableSegmentation(),   # add when implemented
+        SyllableSegmentation(),
         # Export(...),              # add when implemented
     ]
     for step in remaining_steps:
@@ -278,12 +274,12 @@ def export_json(
     manifest: dict[str, str],
     out_path: str,
 ) -> None:
-    """Write line polygons and word bboxes to a GUI-compatible JSON file.
+    """Write line polygons, word bboxes, and syllable bboxes to a GUI-compatible JSON file.
 
     All coordinates are absolute image pixels.
 
     Args:
-        collection: Collection after GroundTruthWordSegmentation.
+        collection: Collection after SyllableSegmentation.
         image_path: Original folio image path (used for folio name).
         manifest:   Node-label → Cantus-text mapping; used to tag words
                     as 'gt' (label in manifest) or 'fallback'.
@@ -297,11 +293,20 @@ def export_json(
         words = []
         for word_node in line_node.children:
             wbbox = word_node.bbox
+            syllables = []
+            for syl_node in word_node.children:
+                sbbox = syl_node.bbox
+                syllables.append({
+                    "label": syl_node.label,
+                    "text": syl_node.text or "",
+                    "bbox": [sbbox.xmin, sbbox.ymin, sbbox.xmax, sbbox.ymax],
+                })
             words.append({
                 "label": word_node.label,
                 "text": word_node.text or "",
                 "bbox": [wbbox.xmin, wbbox.ymin, wbbox.xmax, wbbox.ymax],
                 "source": "gt" if line_node.label in manifest else "fallback",
+                "syllables": syllables,
             })
         lines.append({
             "label": line_node.label,

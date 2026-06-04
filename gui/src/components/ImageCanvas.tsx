@@ -1,6 +1,6 @@
 import OpenSeadragon from "openseadragon";
 import { useEffect, useRef, useState } from "react";
-import type { LayerKey, LineEntry, PipelineData, WordEntry } from "../types";
+import type { LayerKey, LineEntry, PipelineData, SyllableEntry, WordEntry } from "../types";
 
 interface Props {
   imageUrl: string;
@@ -43,12 +43,21 @@ interface SvgState {
     width: number;
     height: number;
   }[];
+  syllableRects: {
+    key: string;
+    points: string;
+    syllable: SyllableEntry;
+    cx: number;
+    cy: number;
+    width: number;
+    height: number;
+  }[];
 }
 
 export function ImageCanvas({ imageUrl, data, layers }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<OpenSeadragon.Viewer | null>(null);
-  const [svgState, setSvgState] = useState<SvgState>({ linePolygons: [], wordRects: [] });
+  const [svgState, setSvgState] = useState<SvgState>({ linePolygons: [], wordRects: [], syllableRects: [] });
   const [svgSize, setSvgSize] = useState({ w: 0, h: 0 });
   const [selectedLineKey, setSelectedLineKey] = useState<string | null>(null);
 
@@ -100,7 +109,32 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
         })
       );
 
-      setSvgState({ linePolygons, wordRects });
+      const syllableRects = data.lines.flatMap((line) =>
+        line.words.flatMap((word) =>
+          (word.syllables ?? []).map((syl) => {
+            const pts = bboxToPoints(syl.bbox);
+            const svgPts = pts.map(([x, y]) => {
+              const vp = viewer.viewport.imageToViewportCoordinates(x, y);
+              return viewer.viewport.viewportToViewerElementCoordinates(vp);
+            });
+            const minX = Math.min(...svgPts.map((p) => p.x));
+            const minY = Math.min(...svgPts.map((p) => p.y));
+            const maxX = Math.max(...svgPts.map((p) => p.x));
+            const maxY = Math.max(...svgPts.map((p) => p.y));
+            return {
+              key: syl.label,
+              points: svgPts.map((p) => `${p.x},${p.y}`).join(" "),
+              syllable: syl,
+              cx: minX,
+              cy: minY,
+              width: maxX - minX,
+              height: maxY - minY,
+            };
+          })
+        )
+      );
+
+      setSvgState({ linePolygons, wordRects, syllableRects });
     };
 
     viewer.addHandler("open", recompute);
@@ -144,6 +178,34 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
                   setSelectedLineKey((prev) => (prev === line.label ? null : line.label))
                 }
               />
+            );
+          })}
+
+        {/* Syllable rects — amber, rendered below word boxes */}
+        {layers.syllables &&
+          svgState.syllableRects.map(({ key, points, syllable, cx, cy, width, height }) => {
+            const fs = Math.max(9, Math.round(height * 0.4));
+            return (
+              <g key={key}>
+                <polygon
+                  points={points}
+                  fill="rgba(251,146,60,0.10)"
+                  stroke="rgb(251,146,60)"
+                  strokeWidth={1}
+                />
+                {syllable.text && syllable.text.length * fs * 0.4 <= width && (
+                  <text
+                    x={cx + 2}
+                    y={cy - 2}
+                    fontSize={fs}
+                    fontFamily="ui-monospace, monospace"
+                    fill="rgb(251,146,60)"
+                    style={{ userSelect: "none", pointerEvents: "none" }}
+                  >
+                    {syllable.text}
+                  </text>
+                )}
+              </g>
             );
           })}
 

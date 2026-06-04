@@ -18,13 +18,22 @@ const LAYER_STYLES: Record<LayerKey, { active: string; inactive: string; label: 
     inactive: "bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600",
     label: "Words",
   },
+  syllables: {
+    active: "bg-orange-500 text-white border-orange-400",
+    inactive: "bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600",
+    label: "Syllables",
+  },
 };
 
 export function TopBar({ data, layers, onToggle, onOpenFiles }: Props) {
   const wordCount = data?.lines.reduce((n, l) => n + l.words.length, 0) ?? 0;
+  const syllableCount = data?.lines.reduce(
+    (n, l) => n + l.words.reduce((m, w) => m + (w.syllables?.length ?? 0), 0), 0
+  ) ?? 0;
   const counts: Record<LayerKey, number> = {
     lines: data?.lines.length ?? 0,
     words: wordCount,
+    syllables: syllableCount,
   };
 
   return (
@@ -46,7 +55,7 @@ export function TopBar({ data, layers, onToggle, onOpenFiles }: Props) {
       {/* Layer toggles */}
       {data && (
         <div className="flex items-center gap-1.5">
-          {(["lines", "words"] as LayerKey[]).map((key) => {
+          {(["lines", "words", "syllables"] as LayerKey[]).map((key) => {
             const cfg = LAYER_STYLES[key];
             const active = layers[key];
             return (
