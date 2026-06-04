@@ -1,17 +1,21 @@
 """NW-based chant text allocator for the mothra-text pipeline.
 
-Sub-plans 4a, 4b, and 4c: flat text builder, volpiano anchor extraction,
-NW-based line allocation, and folio-state persistence for continuation chants.
+Sub-plans 4a, 4b, and 4c: flat text builder, volpiano anchor
+extraction, NW-based line allocation, and folio-state persistence
+for continuation chants.
 
 Flattens all chant words for a folio into a single ordered sequence
-(FlatTextData) and records volpiano-derived break positions as Anchors.
-This replaces the one-to-one row→line approach of build_page_manifest(),
-which fails when a chant starts mid-line after the previous chant ends.
+(FlatTextData) and records volpiano-derived break positions as
+Anchors. This replaces the one-to-one row→line approach of
+build_page_manifest(), which fails when a chant starts mid-line
+after the previous chant ends.
 
-The NW alignment step (4b) will consume FlatTextData and map each detected
-line to a word span using Needleman-Wunsch alignment against OCR output.
+The NW alignment step (4b) will consume FlatTextData and map each
+detected line to a word span using Needleman-Wunsch alignment
+against OCR output.
 
-FolioState (4c) carries post-77 continuation words across folio runs.
+FolioState (4c) carries post-77 continuation words across folio
+runs.
 """
 
 from __future__ import annotations
@@ -22,13 +26,13 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Anchor:
-    word_index: int  # cumulative words consumed in flat_text.words when this break occurs
-    anchor_type: str  # "within_chant_7" | "page_break_77" | "column_break_777"
+    word_index: int   # index in flat_text.words after the break
+    anchor_type: str  # within_chant_7 | page_break_77 | column_break_777
 
 
 @dataclass
 class ChantSpan:
-    sequence: int    # CSV sequence number; 0 for prev-folio continuation span
+    sequence: int    # CSV sequence number; 0 for prev-folio continuation
     start_word: int  # inclusive index into flat_text.words
     end_word: int    # exclusive index into flat_text.words
 
@@ -40,7 +44,7 @@ class FlatTextData:
     chant_spans: list[ChantSpan]
     initial_pointer: int = 0
     continuation_words: list[str] = field(default_factory=list)
-    has_continuation: bool = False  # True when continuation words were prepended
+    has_continuation: bool = False  # True if continuation was prepended
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +52,7 @@ class FlatTextData:
 # ---------------------------------------------------------------------------
 
 def _folio_sort_key(folio: str) -> tuple[int, int]:
-    """Parse a folio string like '006r', '006v', '169v' into a sortable (num, side) key."""
+    """Return a sortable (num, side) key for a folio string like '006r'."""
     m = re.match(r"0*(\d+)([rv])", folio.strip().lower())
     if m:
         return (int(m.group(1)), 0 if m.group(2) == "r" else 1)
@@ -67,20 +71,18 @@ def _classify_break(break_str: str) -> str:
 def _parse_row_words_and_anchors(
     text: str, volpiano: str
 ) -> tuple[list[str], list[tuple[int, str]], list[str]]:
-    """Parse one chant row's text+volpiano into words, anchor positions, and continuation.
+    """Parse one chant row's text+volpiano into words and anchors.
 
-    Mirrors the word-counting logic of split_by_volpiano() from gt_manifest.py
-    but also tracks break types and identifies post-77 continuation words that
-    belong to the next folio.
+    Also identifies post-77 continuation words for the next folio.
 
     Returns:
         (this_folio_words, raw_anchors, continuation_words)
 
-        - this_folio_words: words on this folio (up to the first 77 break, if any)
-        - raw_anchors: [(word_offset_within_row, anchor_type), ...] — word_offset is
-          the cumulative word count AFTER the break (i.e. when the next line starts)
-        - continuation_words: words after the first 77 break (belong to the next folio;
-          there is no separate CSV row for these words)
+        - this_folio_words: words on this folio (up to first 77, if any)
+        - raw_anchors: [(word_offset, anchor_type), ...] where
+          word_offset is the cumulative count AFTER the break
+        - continuation_words: words after the first 77 break (belong
+          to the next folio; no separate CSV row for these)
     """
     words = text.split() if text else []
     if not words:
@@ -88,7 +90,7 @@ def _parse_row_words_and_anchors(
     if not volpiano:
         return words, [], []
 
-    # Split volpiano keeping the break strings: ["seg0", "7+", "seg1", "7+", ...]
+    # Split volpiano keeping breaks: ["seg0", "7+", "seg1", "7+", ...]
     parts = re.split(r"(7+)", volpiano)
 
     word_idx = 0
@@ -102,15 +104,18 @@ def _parse_row_words_and_anchors(
         i += 1
 
         # Count new words contributed by this segment.
-        # A word group is a stretch between '---' separators containing at least
-        # one letter (clef digits like '9' are excluded).
-        word_groups = [g for g in seg.split("---") if re.search(r"[a-zA-Z]", g)]
+        # A word group is a stretch between '---' separators with
+        # at least one letter (clef digits like '9' are excluded).
+        word_groups = [
+            g for g in seg.split("---")
+            if re.search(r"[a-zA-Z]", g)
+        ]
         n = len(word_groups)
         if n > 0:
-            # When a line break falls inside a word, the segment that follows
-            # starts with '--' (syllable boundary, not '---' word boundary).
-            # The first group in that segment is a mid-word continuation of the
-            # previous line's last word and does not represent a new word.
+            # When a line break falls inside a word, the following
+            # segment starts with '--' (syllable, not word boundary).
+            # Its first group is a mid-word continuation and does not
+            # represent a new word.
             seg_stripped = re.sub(r"^[1-9]", "", seg)
             if seg_count > 0 and re.match(r"--[^-]", seg_stripped):
                 n -= 1
@@ -127,13 +132,16 @@ def _parse_row_words_and_anchors(
             if anchor_type == "page_break_77" and continuation_start is None:
                 continuation_start = word_idx
 
-    # Determine which words stay on this folio and which continue to the next.
+    # Determine which words stay on this folio vs continue to next.
     if continuation_start is not None:
         this_folio_words = words[:continuation_start]
         continuation_words = words[continuation_start:]
-        # Drop anchors that are at or after the continuation boundary
+        # Drop anchors at or after the continuation boundary
         # (they describe structure on the next folio, not this one).
-        raw_anchors = [(wi, at) for wi, at in raw_anchors if wi <= continuation_start]
+        raw_anchors = [
+            (wi, at) for wi, at in raw_anchors
+            if wi <= continuation_start
+        ]
     else:
         this_folio_words = words
         continuation_words = []
@@ -155,20 +163,22 @@ def build_flat_text_and_anchors(
     """Build flat word sequence and volpiano anchors for one folio.
 
     Args:
-        csv_rows:            All rows from a Cantus CSV (any folio).
-        folio:               Folio string to filter rows (e.g. "006r").
-        line_offset:         Number of within_chant_7 breaks to skip before
-                             alignment starts. Use when the image crop begins
-                             partway into the folio.
-        prev_folio_state:    FolioState from the previous folio run (Sub-plan 4c).
-                             If provided, its remaining_words (post-77 continuation)
-                             are prepended to flat_text before this folio's rows.
-                             Takes priority over infer_continuation.
-        infer_continuation:  When True (default) and prev_folio_state is None,
-                             scan csv_rows for the last row from any preceding folio
-                             that has a 77 break and prepend its post-77 words.
-                             This handles the common case where the previous folio
-                             was not run first.
+        csv_rows:           All rows from a Cantus CSV (any folio).
+        folio:              Folio string to filter rows (e.g. "006r").
+        line_offset:        Number of within_chant_7 breaks to skip
+                            before alignment starts. Use when the image
+                            crop begins partway into the folio.
+        prev_folio_state:   FolioState from the previous folio run.
+                            If provided, its remaining_words (post-77
+                            continuation) are prepended to flat_text
+                            before this folio's rows. Takes priority
+                            over infer_continuation.
+        infer_continuation: When True (default) and prev_folio_state
+                            is None, scan csv_rows for the last row
+                            from any preceding folio with a 77 break
+                            and prepend its post-77 words. Handles the
+                            common case where the previous folio was
+                            not run first.
 
     Returns:
         FlatTextData with words, anchors, chant_spans, initial_pointer,
@@ -193,8 +203,8 @@ def build_flat_text_and_anchors(
         ))
         has_continuation = True
     elif infer_continuation:
-        # Scan all CSV rows for the last row from a preceding folio with a 77
-        # break — its post-77 words belong to this folio.
+        # Scan all CSV rows for the last row from a preceding folio
+        # with a 77 break — its post-77 words belong to this folio.
         target_key = _folio_sort_key(folio)
         prev_77_rows = [
             r for r in csv_rows
@@ -243,8 +253,8 @@ def build_flat_text_and_anchors(
             continue
 
         volpiano = (row.get("volpiano") or "").strip()
-        row_words, raw_anchors, row_continuation = _parse_row_words_and_anchors(
-            text, volpiano
+        row_words, raw_anchors, row_continuation = (
+            _parse_row_words_and_anchors(text, volpiano)
         )
 
         if not row_words and not row_continuation:
@@ -271,10 +281,12 @@ def build_flat_text_and_anchors(
             # No more rows contribute to this folio after a 77 break.
             break
 
-    # Compute initial_pointer: advance past the first line_offset within_chant_7 breaks.
+    # Advance initial_pointer past the first line_offset within_chant_7 breaks.
     initial_pointer = 0
     if line_offset > 0:
-        within_anchors = [a for a in anchors if a.anchor_type == "within_chant_7"]
+        within_anchors = [
+            a for a in anchors if a.anchor_type == "within_chant_7"
+        ]
         if line_offset <= len(within_anchors):
             initial_pointer = within_anchors[line_offset - 1].word_index
 
@@ -294,8 +306,7 @@ def build_flat_text_and_anchors(
 
 @dataclass
 class ValidationFlag:
-    flag_type: str  # "line_count_mismatch" | "nw_volpiano_disagreement" |
-                    # "column_count_uncertain" | "page_break_77_mismatch"
+    flag_type: str
     detail: str
 
 
@@ -303,7 +314,8 @@ class ValidationFlag:
 class AllocationResult:
     manifest: dict[str, str]   # node_label → word-fragment string
     flags: list[ValidationFlag]
-    text_pointer_end: int       # flat_text word index after last consumed word (for 4c)
+    text_pointer_end: int       # flat_text index after last consumed word
+    debug_lines: list[dict] | None = None  # set when debug=True
 
 
 def allocate_lines(
@@ -318,41 +330,46 @@ def allocate_lines(
     mismatch_score: float = -5.0,
     open_penalty: float = -7.0,
     extend_penalty: float = -3.0,
+    debug: bool = False,
 ) -> AllocationResult:
     """Align OCR text for each line against flat_text using NW alignment.
 
-    For each label in sorted_labels, scores candidate word spans of lengths
-    1..search_window by normalising the NW alignment score by the geometric
-    mean of the OCR string length and the candidate span length.  Optionally
-    snaps the result to the nearest volpiano anchor within snap_window words.
+    For each label in sorted_labels, scores candidate word spans of
+    lengths 1..search_window by normalising the NW alignment score by
+    the geometric mean of the OCR string length and the candidate span
+    length.  Optionally snaps the result to the nearest volpiano anchor
+    within snap_window words.
 
-    When model=None was used for KrakenRecognition, all OCR texts will be
-    empty strings.  In stub mode each line is advanced to the next anchor
-    position so the pipeline can complete end-to-end.
+    When model=None was used for KrakenRecognition, all OCR texts will
+    be empty strings.  In stub mode each line is advanced to the next
+    anchor position so the pipeline can complete end-to-end.
 
     Args:
         flat_text:          Output of build_flat_text_and_anchors().
-        sorted_labels:      Line node labels in reading order (left column
-                            first, then right column).
-        ocr_texts:          {label: ocr_string} mapping.  Missing labels or
-                            empty strings trigger stub-mode advancement.
+        sorted_labels:      Line node labels in reading order (left
+                            column first, then right column).
+        ocr_texts:          {label: ocr_string} mapping.  Missing
+                            labels or empty strings trigger stub mode.
         column_count:       1 or 2 (from cluster_columns()).
-        left_column_count:  Number of labels in the left column.  When > 0
-                            and column_count >= 2, text_pointer is hard-reset
-                            to the column_break_777 anchor at label index
-                            left_column_count.
+        left_column_count:  Number of labels in the left column.
+                            When > 0 and column_count >= 2, pointer is
+                            hard-reset to the column_break_777 anchor
+                            at label index left_column_count.
         search_window:      Maximum words to look ahead per line.
-        snap_window:        Anchor snap tolerance in words.  NW results within
-                            this distance of the next volpiano anchor are
-                            snapped to it silently; larger differences emit
-                            a nw_volpiano_disagreement flag.
+        snap_window:        Anchor snap tolerance in words.  NW results
+                            within this distance of the next volpiano
+                            anchor are snapped to it silently; larger
+                            differences emit nw_volpiano_disagreement.
         match_score, mismatch_score, open_penalty, extend_penalty:
-                            Bio.Align.PairwiseAligner scoring parameters.
-                            Defaults are Rodan's calibrated values for
-                            medieval chant manuscripts.
+                            Bio.Align.PairwiseAligner scoring params.
+                            Defaults are calibrated for medieval chant.
+        debug:              When True, populate AllocationResult.
+                            debug_lines with per-line OCR and NW
+                            alignment detail.
 
     Returns:
-        AllocationResult with manifest, validation flags, and text_pointer_end.
+        AllocationResult with manifest, validation flags, and
+        text_pointer_end.  debug_lines is populated when debug=True.
     """
     from math import sqrt
 
@@ -368,12 +385,13 @@ def allocate_lines(
     manifest: dict[str, str] = {}
     flags: list[ValidationFlag] = []
     text_pointer = flat_text.initial_pointer
+    debug_lines_out: list[dict] | None = [] if debug else None
 
     # Sort anchors by word_index once for efficient lookup.
     sorted_anchors = sorted(flat_text.anchors, key=lambda a: a.word_index)
 
-    # Heuristic: if the folio's first word is lowercase and no continuation words
-    # were prepended, the folio may begin mid-chant with a missed continuation.
+    # Heuristic: lowercase first word without prepended continuation
+    # suggests the folio may begin mid-chant.
     if (
         not flat_text.has_continuation
         and flat_text.words
@@ -382,12 +400,17 @@ def allocate_lines(
         flags.append(ValidationFlag(
             "continuation_missing",
             f"First word of folio is lowercase ({flat_text.words[0]!r}); "
-            "consider providing --prev-folio-state if this folio starts mid-chant",
+            "consider providing --prev-folio-state "
+            "if this folio starts mid-chant",
         ))
 
     for label_idx, label in enumerate(sorted_labels):
         # Hard-reset at column boundary (two-column folios only).
-        if column_count >= 2 and left_column_count > 0 and label_idx == left_column_count:
+        if (
+            column_count >= 2
+            and left_column_count > 0
+            and label_idx == left_column_count
+        ):
             col_break = next(
                 (a for a in sorted_anchors
                  if a.anchor_type == "column_break_777"
@@ -399,15 +422,41 @@ def allocate_lines(
             else:
                 flags.append(ValidationFlag(
                     "column_count_uncertain",
-                    f"Expected column_break_777 anchor near word {text_pointer} but none found",
+                    f"Expected column_break_777 anchor near word "
+                    f"{text_pointer} but none found",
                 ))
 
-        candidate_words = flat_text.words[text_pointer: text_pointer + search_window]
+        candidate_words = flat_text.words[
+            text_pointer: text_pointer + search_window
+        ]
         if not candidate_words:
             manifest[label] = ""
+            if debug and debug_lines_out is not None:
+                debug_lines_out.append({
+                    "label": label,
+                    "ocr": "",
+                    "pointer_start": text_pointer,
+                    "pointer_end": text_pointer,
+                    "consumed": 0,
+                    "assigned": "",
+                    "best_k_pre_snap": 0,
+                    "best_norm": None,
+                    "anchor_word": None,
+                    "anchor_type": None,
+                    "snapped": False,
+                    "alignment": "(no words left)",
+                })
             continue
 
         ocr = (ocr_texts.get(label) or "").strip()
+
+        # Debug-only tracking variables (no effect on allocation logic).
+        _dbg_ptr_start = text_pointer
+        _dbg_best_k_pre_snap = 0
+        _dbg_best_norm: float | None = None
+        _dbg_next_snap: Anchor | None = None
+        _dbg_snapped = False
+        _dbg_alignment = ""
 
         if not ocr:
             # Stub mode: advance to the next anchor of any type.
@@ -415,9 +464,12 @@ def allocate_lines(
                 (a for a in sorted_anchors if a.word_index > text_pointer),
                 None,
             )
-            consumed = (next_anchor.word_index - text_pointer) if next_anchor else 1
+            consumed = (
+                (next_anchor.word_index - text_pointer)
+                if next_anchor else 1
+            )
         else:
-            # Find the word count that maximises NW score / geometric mean of lengths.
+            # Find word count maximising NW score / geometric mean of lengths.
             best_norm = float("-inf")
             best_k = 1
             for k in range(1, len(candidate_words) + 1):
@@ -429,24 +481,28 @@ def allocate_lines(
                     best_norm = norm
                     best_k = k
             consumed = best_k
+            _dbg_best_k_pre_snap = best_k
+            _dbg_best_norm = best_norm
 
-            # Snap to the next within_chant_7 or page_break_77 anchor if close.
+            # Snap to the next within_chant_7 or page_break_77 anchor.
             next_snap = next(
                 (a for a in sorted_anchors
                  if a.word_index > text_pointer
                  and a.anchor_type in ("within_chant_7", "page_break_77")),
                 None,
             )
+            _dbg_next_snap = next_snap
             if next_snap:
                 raw_end = text_pointer + consumed
                 diff = abs(raw_end - next_snap.word_index)
                 if diff <= snap_window:
                     consumed = next_snap.word_index - text_pointer
+                    _dbg_snapped = True
                     if next_snap.anchor_type == "page_break_77" and diff > 0:
                         flags.append(ValidationFlag(
                             "page_break_77_mismatch",
-                            f"Line {label}: snapped to page_break_77 at word "
-                            f"{next_snap.word_index} (NW was {raw_end})",
+                            f"Line {label}: snapped to page_break_77 at "
+                            f"word {next_snap.word_index} (NW was {raw_end})",
                         ))
                 elif diff > snap_window:
                     flag_type = (
@@ -460,9 +516,41 @@ def allocate_lines(
                         f"anchor at {next_snap.word_index} (diff={diff})",
                     ))
 
+            if debug:
+                try:
+                    final_window = " ".join(
+                        candidate_words[:max(consumed, 1)]
+                    )
+                    _aligns = aligner.align(ocr, final_window)
+                    _dbg_alignment = str(next(iter(_aligns)))
+                except Exception:
+                    _dbg_alignment = "(alignment unavailable)"
+
         consumed = max(consumed, 0)
-        manifest[label] = " ".join(flat_text.words[text_pointer: text_pointer + consumed])
+        manifest[label] = " ".join(
+            flat_text.words[text_pointer: text_pointer + consumed]
+        )
         text_pointer += consumed
+
+        if debug and debug_lines_out is not None:
+            debug_lines_out.append({
+                "label": label,
+                "ocr": ocr,
+                "pointer_start": _dbg_ptr_start,
+                "pointer_end": text_pointer,
+                "consumed": consumed,
+                "assigned": manifest[label],
+                "best_k_pre_snap": _dbg_best_k_pre_snap,
+                "best_norm": _dbg_best_norm,
+                "anchor_word": (
+                    _dbg_next_snap.word_index if _dbg_next_snap else None
+                ),
+                "anchor_type": (
+                    _dbg_next_snap.anchor_type if _dbg_next_snap else None
+                ),
+                "snapped": _dbg_snapped,
+                "alignment": _dbg_alignment,
+            })
 
     if text_pointer < len(flat_text.words):
         flags.append(ValidationFlag(
@@ -475,6 +563,7 @@ def allocate_lines(
         manifest=manifest,
         flags=flags,
         text_pointer_end=text_pointer,
+        debug_lines=debug_lines_out,
     )
 
 
@@ -486,19 +575,20 @@ def allocate_lines(
 class FolioState:
     """Carries post-77 continuation words and metadata across folio runs.
 
-    When the last chant row on a folio has a 77 (page break) in its volpiano,
-    the words after the 77 belong to the next folio but have no separate CSV
-    row.  FolioState captures those words so the next folio run can prepend
-    them via build_flat_text_and_anchors(prev_folio_state=...).
+    When the last chant row on a folio has a 77 (page break) in its
+    volpiano, the words after the 77 belong to the next folio but have
+    no separate CSV row.  FolioState captures those words so the next
+    folio run can prepend them via
+    build_flat_text_and_anchors(prev_folio_state=...).
 
-    Also captures the unconsumed flat_text tail when the NW allocator didn't
-    reach the end of flat_text (fewer detected lines than expected).
+    Also captures the unconsumed flat_text tail when the NW allocator
+    didn't reach the end (fewer detected lines than expected).
     """
 
     source_id: int | None
     folio: str
-    last_chant_sequence: int    # sequence of the last chant row on this folio
-    remaining_words: list[str]  # words for the next folio (post-77 or unconsumed)
+    last_chant_sequence: int    # sequence of last chant row on this folio
+    remaining_words: list[str]  # words for next folio (post-77 or unconsumed)
     fully_consumed: bool        # True when remaining_words is empty
 
 
@@ -511,21 +601,24 @@ def build_folio_state(
     """Build a FolioState from the allocation result for the current folio.
 
     Two sources for remaining_words (in priority order):
-    1. flat_text.continuation_words — words after a 77 break in the last row;
-       these are physically on the next folio and have no separate CSV row.
-    2. flat_text.words[result.text_pointer_end:] — flat_text words not consumed
-       by the allocator; this occurs when fewer lines were detected than expected.
+    1. flat_text.continuation_words — words after a 77 break in the
+       last row; physically on the next folio, no separate CSV row.
+    2. flat_text.words[result.text_pointer_end:] — words not consumed
+       by the allocator (fewer lines detected than expected).
 
     Args:
         flat_text: FlatTextData returned by build_flat_text_and_anchors().
         result:    AllocationResult returned by allocate_lines().
-        source_id: Cantus source ID (passed through for the next folio run).
+        source_id: Cantus source ID (passed through for next folio run).
         folio:     Current folio string (for provenance).
 
     Returns:
-        FolioState ready to be passed as prev_folio_state on the next folio.
+        FolioState ready to be passed as prev_folio_state on next folio.
     """
-    remaining = flat_text.continuation_words or flat_text.words[result.text_pointer_end:]
+    remaining = (
+        flat_text.continuation_words
+        or flat_text.words[result.text_pointer_end:]
+    )
     last_span = next(
         (s for s in reversed(flat_text.chant_spans)
          if s.start_word <= result.text_pointer_end),
@@ -550,7 +643,7 @@ def write_folio_state(state: FolioState, path: str) -> None:
 
 
 def read_folio_state(path: str) -> FolioState:
-    """Deserialise a FolioState from a JSON file written by write_folio_state()."""
+    """Deserialise FolioState from a JSON file by write_folio_state()."""
     import json
 
     with open(path, encoding="utf-8") as f:

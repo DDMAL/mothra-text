@@ -29,18 +29,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from htrflow.volume.volume import Collection
+from htrflow.volume.volume import Collection  # noqa: E402
 
-from steps.column_clustering import cluster_columns, fuse_colinear_segments
-from steps.gt_manifest import (
+from steps.column_clustering import (  # noqa: E402
+    cluster_columns,
+    fuse_colinear_segments,
+)
+from steps.gt_manifest import (  # noqa: E402
     fetch_cantus_csv,
     load_local_csv,
     make_manifest_lookup,
 )
-from steps.ground_truth_word_segmentation import GroundTruthWordSegmentation
-from steps.kraken_recognition import KrakenRecognition
-from steps.kraken_segmentation import KrakenSegmentation
-from steps.nw_chant_allocator import (
+from steps.ground_truth_word_segmentation import (  # noqa: E402
+    GroundTruthWordSegmentation,
+)
+from steps.kraken_recognition import KrakenRecognition  # noqa: E402
+from steps.kraken_segmentation import KrakenSegmentation  # noqa: E402
+from steps.nw_chant_allocator import (  # noqa: E402
     FolioState,
     allocate_lines,
     build_flat_text_and_anchors,
@@ -94,35 +99,38 @@ def run(
     column_variance_threshold: float = 0.5,
     prev_folio_state: "FolioState | None" = None,
     folio_state_out: str | None = None,
+    debug_ocr: bool = False,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
     Args:
-        image_path:                 Path to the folio JPEG/PNG/TIFF.
-        folio:                      Folio string exactly as it appears in the CSV.
-        source_id:                  Cantus source ID (fetches CSV from cantusdatabase.org).
-        csv_path:                   Path to a local Cantus-format CSV (alternative to
-                                    source_id).
-        recognition_model:          HuggingFace model ID or local path to a Kraken
-                                    ``.mlmodel`` file.  Pass ``None`` (default) to run
-                                    in stub mode (empty text, pipeline still completes).
-        device:                     Kraken inference device (``"cpu"`` or ``"cuda"``).
-        line_offset:                Cantus lines to skip before aligning with detected
-                                    nodes.  Use when the image is a crop starting partway
-                                    through the folio.
-        column_variance_threshold:  Minimum fraction of xmin variance explained by the
-                                    two-cluster split for the page to be treated as
-                                    two-column.  See cluster_columns().
-        prev_folio_state:           FolioState from the previous folio run.  When
-                                    provided, its remaining_words (post-77 continuation)
-                                    are prepended to the flat text before alignment.
-        folio_state_out:            If given, write the folio state JSON to this path
-                                    after allocation (for use as prev_folio_state on
-                                    the next folio).
+        image_path: Path to the folio JPEG/PNG/TIFF.
+        folio: Folio string exactly as it appears in the CSV.
+        source_id: Cantus source ID (fetches from cantusdatabase.org).
+        csv_path: Path to a local Cantus-format CSV (alternative to
+            source_id).
+        recognition_model: HuggingFace model ID or local path to a
+            Kraken ``.mlmodel`` file.  Pass ``None`` (default) to run
+            in stub mode (empty text, pipeline still completes).
+        device: Kraken inference device (``"cpu"`` or ``"cuda"``).
+        line_offset: Cantus lines to skip before aligning with detected
+            nodes.  Use when the image is a crop starting partway
+            through the folio.
+        column_variance_threshold: Minimum fraction of xmin variance
+            explained by the two-cluster split for the page to be
+            treated as two-column.  See cluster_columns().
+        prev_folio_state: FolioState from the previous folio run.
+            When provided, its remaining_words (post-77 continuation)
+            are prepended to the flat text before alignment.
+        folio_state_out: If given, write the folio state JSON to this
+            path after allocation (for use as prev_folio_state on the
+            next folio).
+        debug_ocr: When True, print per-fused-line OCR text and NW
+            alignment detail to stdout for diagnosis.
 
     Returns:
-        Tuple of (collection, manifest) where collection has word-level nodes
-        and manifest is the node-label → Cantus-text mapping used for GT.
+        Tuple of (collection, manifest) where collection has word-level
+        nodes and manifest is the node-label → Cantus-text mapping.
     """
     collection = Collection([image_path])
 
@@ -143,18 +151,29 @@ def run(
     logger.info("  %d column(s) detected", column_count)
 
     # Stage 3: Kraken HTR text recognition
-    logger.info("Stage 3: Kraken HTR recognition (model=%r)", recognition_model)
-    collection = KrakenRecognition(model=recognition_model, device=device).run(collection)
+    logger.info(
+        "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
+    )
+    collection = KrakenRecognition(
+        model=recognition_model, device=device
+    ).run(collection)
 
     # Stage 4: NW chant allocation
     if csv_path:
-        logger.info("Stage 4: NW allocation — loading local CSV from %s", csv_path)
+        logger.info(
+            "Stage 4: NW allocation — loading local CSV from %s", csv_path
+        )
         csv_rows = load_local_csv(csv_path)
     else:
-        logger.info("Stage 4: NW allocation — fetching Cantus CSV for source %d", source_id)
+        logger.info(
+            "Stage 4: NW allocation — fetching Cantus CSV for source %d",
+            source_id,
+        )
         csv_rows = fetch_cantus_csv(source_id)
     flat_text = build_flat_text_and_anchors(
-        csv_rows, folio, line_offset=line_offset, prev_folio_state=prev_folio_state
+        csv_rows, folio,
+        line_offset=line_offset,
+        prev_folio_state=prev_folio_state,
     )
     node_ocr = {node.label: (node.text or "") for node in page.children}
     fused_lines = fuse_colinear_segments(list(page.children), split_x)
@@ -168,15 +187,64 @@ def run(
         f.label: " ".join(node_ocr[lbl] for lbl in f.constituent_labels)
         for f in fused_lines
     }
+
+    # --- DEBUG OCR: print per-fused-line OCR transcripts ---
+    if debug_ocr:
+        print("\n=== DEBUG OCR: fused line transcripts ===")
+        for f in fused_lines:
+            print(f"  [{f.label}] {fused_ocr_texts[f.label]!r}")
+        print()
+    # --------------------------------------------------------
+
     alloc_result = allocate_lines(
         flat_text=flat_text,
         sorted_labels=fused_sorted_labels,
         ocr_texts=fused_ocr_texts,
         column_count=column_count,
+        snap_window=2,
+        debug=debug_ocr,
     )
+
+    # --- DEBUG OCR: print per-line NW alignment detail ---
+    if debug_ocr and alloc_result.debug_lines:
+        print("\n=== DEBUG NW ALIGNMENT ===")
+        for entry in alloc_result.debug_lines:
+            print(f"\n-- {entry['label']} --")
+            print(f"  OCR:      {entry['ocr']!r}")
+            print(f"  Assigned: {entry['assigned']!r}")
+            ptr_s = entry['pointer_start']
+            ptr_e = entry['pointer_end']
+            print(
+                f"  Words:    [{ptr_s}..{ptr_e})"
+                f" consumed={entry['consumed']}"
+            )
+            if entry['best_norm'] is not None:
+                k_pre = entry['best_k_pre_snap']
+                norm = entry['best_norm']
+                print(
+                    f"  NW score: k={k_pre} (pre-snap),"
+                    f" norm={norm:.4f}"
+                )
+            if entry['anchor_word'] is not None:
+                nw_end = entry['pointer_start'] + entry['best_k_pre_snap']
+                diff = abs(nw_end - entry['anchor_word'])
+                print(
+                    f"  Anchor:   word {entry['anchor_word']}"
+                    f" ({entry['anchor_type']})"
+                    f", diff={diff}, snapped={entry['snapped']}"
+                )
+            if entry['alignment']:
+                print("  Alignment:")
+                for aln_line in entry['alignment'].splitlines():
+                    print(f"    {aln_line}")
+        print("=== END DEBUG ===\n")
+    # ------------------------------------------------------
+
     manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
     for flag in alloc_result.flags:
-        logger.warning("Validation flag [%s]: %s", flag.flag_type, flag.detail)
+        logger.warning(
+            "Validation flag [%s]: %s", flag.flag_type, flag.detail
+        )
     logger.info(
         "  Manifest: %d / %d node labels assigned text",
         sum(1 for v in manifest.values() if v),
@@ -299,10 +367,11 @@ def main() -> None:
              "the folio (default: 0).",
     )
     parser.add_argument(
-        "--column-variance-threshold", type=float, default=0.5, metavar="FLOAT",
-        help="Minimum fraction of x-start variance explained by a two-cluster "
-             "split for the page to be treated as two-column. Higher values "
-             "require tighter clusters (default: 0.5).",
+        "--column-variance-threshold",
+        type=float, default=0.5, metavar="FLOAT",
+        help="Minimum fraction of x-start variance explained by a "
+             "two-cluster split for the page to be treated as two-column. "
+             "Higher values require tighter clusters (default: 0.5).",
     )
     parser.add_argument(
         "--prev-folio-state", metavar="PATH", default=None,
@@ -313,6 +382,11 @@ def main() -> None:
         "--folio-state-out", metavar="PATH", default=None,
         help="Write folio state JSON to PATH after allocation. Pass this "
              "as --prev-folio-state on the next folio run.",
+    )
+    parser.add_argument(
+        "--debug-ocr", action="store_true", default=False,
+        help="Print per-fused-line OCR text and NW alignment detail to "
+             "stdout for diagnosing misalignment.",
     )
     args = parser.parse_args()
 
@@ -337,6 +411,7 @@ def main() -> None:
         column_variance_threshold=args.column_variance_threshold,
         prev_folio_state=prev_state,
         folio_state_out=args.folio_state_out,
+        debug_ocr=args.debug_ocr,
     )
     _summarise(collection)
 
