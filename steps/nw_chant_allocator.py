@@ -123,7 +123,7 @@ def _split_word_at_syl_boundary(
     except LatinError:
         return None
 
-    if len(syllables) != syl_left + syl_right:
+    if len(syllables) < syl_left + syl_right:
         return None
     if syl_left <= 0 or syl_right <= 0:
         return None
@@ -525,6 +525,16 @@ def allocate_lines(
     # Right-side syllable fragment of a split word, carried to the next line.
     syllable_prefix: str | None = None
 
+    # Pre-compute column-1 word ceiling for two-column folios.
+    col_break_word: int | None = None
+    if column_count >= 2 and left_column_count > 0:
+        _cb = next(
+            (a for a in sorted_anchors if a.anchor_type == "column_break_777"),
+            None,
+        )
+        if _cb:
+            col_break_word = _cb.word_index
+
     # Heuristic: lowercase first word without prepended continuation
     # suggests the folio may begin mid-chant.
     if (
@@ -547,9 +557,7 @@ def allocate_lines(
             and label_idx == left_column_count
         ):
             col_break = next(
-                (a for a in sorted_anchors
-                 if a.anchor_type == "column_break_777"
-                 and a.word_index >= max(0, text_pointer - search_window)),
+                (a for a in sorted_anchors if a.anchor_type == "column_break_777"),
                 None,
             )
             if col_break:
@@ -561,9 +569,9 @@ def allocate_lines(
                     f"{text_pointer} but none found",
                 ))
 
-        candidate_words = flat_text.words[
-            text_pointer: text_pointer + search_window
-        ]
+        col1 = col_break_word is not None and label_idx < left_column_count
+        word_limit = col_break_word if col1 else text_pointer + search_window
+        candidate_words = flat_text.words[text_pointer: word_limit]
         if not candidate_words:
             manifest[label] = ""
             if debug and debug_lines_out is not None:
@@ -624,7 +632,8 @@ def allocate_lines(
             next_snap = next(
                 (a for a in sorted_anchors
                  if a.word_index > text_pointer
-                 and a.anchor_type in ("within_chant_7", "page_break_77")),
+                 and a.anchor_type in ("within_chant_7", "page_break_77")
+                 and (not col1 or a.word_index <= col_break_word)),
                 None,
             )
             _dbg_next_snap = next_snap
@@ -681,6 +690,15 @@ def allocate_lines(
                     _dbg_alignment = "(alignment unavailable)"
 
         consumed = max(consumed, 0)
+        if col1:
+            consumed = min(consumed, max(0, col_break_word - text_pointer))
+
+        # Force the last col1 line to close at col_break_word so that any
+        # word the NW left in the gap triggers the MWB lookup below.
+        if (col_break_word is not None
+                and label_idx == left_column_count - 1
+                and text_pointer + consumed < col_break_word):
+            consumed = col_break_word - text_pointer
 
         # Assemble this line's word list, optionally prepending a syllable
         # fragment carried over from a mid-word break on the previous line.

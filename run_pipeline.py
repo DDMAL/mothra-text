@@ -53,6 +53,98 @@ from steps.nw_chant_allocator import (  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+from htrflow.utils.geometry import Bbox as _HtBbox
+from htrflow.volume.volume import ImageNode as _HtImageNode
+
+
+class _HtrflowSplitNode(_HtImageNode):
+    """Synthetic htrflow leaf node for one half of a spanning bbox.
+
+    Inserted into page.children BEFORE KrakenRecognition so that OCR,
+    word segmentation, and export all operate on the correct half-image
+    with the correct half-bbox.  Does not wrap a Segment object.
+    """
+
+    def __init__(self, parent, label: str,
+                 xmin: int, ymin: int, xmax: int, ymax: int,
+                 image_crop):
+        super().__init__(parent=parent, label=label)
+        self._bbox_obj = _HtBbox(xmin, ymin, xmax, ymax)
+        self._image = image_crop   # pre-fill cache; _load_image never called
+
+    @property
+    def bbox(self) -> _HtBbox:
+        return self._bbox_obj
+
+    def _load_image(self):
+        return self._image         # fallback; normally pre-filled in __init__
+
+    def asdict(self) -> dict:
+        from dataclasses import asdict as _dc_asdict
+        return super().asdict() | {
+            "segmentation_label": "region",
+            "segmentation_confidence": 1.0,
+            "bbox": _dc_asdict(self._bbox_obj),
+            "polygon": str(self.polygon),
+        }
+
+
+def _split_spanning_nodes_in_tree(
+    page,
+    split_x: float,
+    min_span_fraction: float = 0.1,
+) -> int:
+    """Replace spanning-bbox nodes in page.children with half-crop pairs.
+
+    Detects nodes where xmin < split_x < xmax (with >= min_span_fraction
+    overhang on each side), crops the page image at split_x, and inserts
+    two _HtrflowSplitNode objects in place of each spanning node.
+
+    Calls page.relabel() after any replacements so that all labels are
+    consistent before KrakenRecognition reads them.
+
+    Returns the number of nodes replaced.
+    """
+    page_img = page.image
+    new_children = []
+    split_count = 0
+
+    for node in list(page.children):
+        xmin, xmax = node.bbox.xmin, node.bbox.xmax
+        ymin, ymax = node.bbox.ymin, node.bbox.ymax
+        width = xmax - xmin or 1
+        sx = int(split_x)
+        left_frac = (sx - xmin) / width
+        right_frac = (xmax - sx) / width
+
+        if (xmin < split_x < xmax
+                and left_frac >= min_span_fraction
+                and right_frac >= min_span_fraction):
+            left_crop = page_img[ymin:ymax, xmin:sx]
+            right_crop = page_img[ymin:ymax, sx:xmax]
+            new_children.append(_HtrflowSplitNode(
+                page, "region", xmin, ymin, sx, ymax, left_crop))
+            new_children.append(_HtrflowSplitNode(
+                page, "region", sx, ymin, xmax, ymax, right_crop))
+            split_count += 1
+            logger.debug(
+                "Split spanning node %r at x=%d (%.0f|%.0f px)",
+                node.label, sx,
+                sx - xmin, xmax - sx,
+            )
+        else:
+            new_children.append(node)
+
+    if split_count:
+        page.children = new_children
+        page.relabel()
+        logger.info(
+            "  Split %d spanning bbox(es) at column boundary x=%d",
+            split_count, int(split_x),
+        )
+
+    return split_count
+
 
 def _defuse_manifest(fused_manifest, fused_lines):
     """Distribute words from each fused label back to constituent node labels.
@@ -146,6 +238,10 @@ def run(
     )
     logger.info("  %d column(s) detected", column_count)
 
+    # Span-fix: split any bboxes crossing the column divide before OCR
+    if column_count >= 2 and split_x is not None:
+        _split_spanning_nodes_in_tree(page, split_x)
+
     # Stage 3: Kraken HTR text recognition
     logger.info(
         "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
@@ -173,6 +269,7 @@ def run(
     )
     node_ocr = {node.label: (node.text or "") for node in page.children}
     fused_lines = fuse_colinear_segments(list(page.children), split_x)
+    left_column_count = sum(1 for f in fused_lines if f.column == 1)
     logger.info(
         "  Fused %d segments → %d logical lines",
         sum(len(f.constituent_labels) for f in fused_lines),
@@ -197,6 +294,7 @@ def run(
         sorted_labels=fused_sorted_labels,
         ocr_texts=fused_ocr_texts,
         column_count=column_count,
+        left_column_count=left_column_count,
         snap_window=2,
         force_window=10,  # force within_chant_7 up to ±10 words mid-chant
         debug=debug_ocr,

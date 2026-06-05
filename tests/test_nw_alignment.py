@@ -214,6 +214,61 @@ class TestAllocateLinesColumnBreak:
             f.flag_type == "column_count_uncertain" for f in result.flags
         )
 
+    def test_col1_cap_prevents_snap_overrun(self):
+        # col_break at word 3; within_chant_7 at word 5 (beyond boundary).
+        # Column-1 last line must stop at word 3, not 5.
+        words = ["a", "b", "c", "d", "e", "f"]
+        anchors = [
+            Anchor(3, "column_break_777"),
+            Anchor(5, "within_chant_7"),
+            Anchor(6, "within_chant_7"),
+        ]
+        flat = _flat(words, anchors)
+        result = allocate_lines(
+            flat,
+            ["col1_line0", "col1_line1", "col2_line0"],
+            {
+                "col1_line0": "a b",
+                "col1_line1": "c d e f",
+                "col2_line0": "d e",
+            },
+            column_count=2,
+            left_column_count=2,
+            snap_window=2,
+            force_window=5,
+        )
+        # col1_line1 must not consume past word 3 even though
+        # within_chant_7 is at 5
+        assigned = result.manifest["col1_line1"]
+        assert "e" not in assigned and "f" not in assigned
+        # col2_line0 starts from col_break at word 3
+        assert result.manifest["col2_line0"] == "d e"
+
+    def test_hard_reset_unconditional(self):
+        # col_break at word 2; col1 stub advances exactly to word 2 (capped by
+        # col_break_word). Hard-reset must fire and col2 must start at word 2.
+        # within_chant_7 at word 4 gives col2_line0 a snap target so NW
+        # produces exactly "w2 w3".
+        words = ["w0", "w1", "w2", "w3", "w4"]
+        anchors = [
+            Anchor(2, "column_break_777"),
+            Anchor(4, "within_chant_7"),  # snap target for col2 line
+            Anchor(5, "within_chant_7"),
+        ]
+        flat = _flat(words, anchors)
+        result = allocate_lines(
+            flat,
+            ["col1_line0", "col2_line0"],
+            {"col1_line0": "", "col2_line0": "w2 w3"},
+            column_count=2,
+            left_column_count=1,
+        )
+        # col2_line0 must start from col_break word 2, not from col1 end
+        assert result.manifest["col2_line0"] == "w2 w3"
+        assert not any(
+            f.flag_type == "column_count_uncertain" for f in result.flags
+        )
+
 
 class TestForceWindow:
     """Tests for the force_window mid-chant snap feature."""
@@ -343,8 +398,14 @@ class TestSplitWordAtSylBoundary:
         assert result == ("do", "minus")
 
     def test_count_mismatch_returns_none(self):
-        # 3 syllables total; 2+5=7 ≠ 3.
+        # under-count: syllabifier gives 3 < syl_left+syl_right=7 → None.
         assert _split_word_at_syl_boundary("dominus", 2, 5) is None
+
+    def test_overcount_syllabifier_splits_at_syl_left(self):
+        # "mathathie" → 4 syllables but volpiano says 1+2=3.
+        # Over-count is allowed: split at syl_left=1 → ("ma", "thathie").
+        result = _split_word_at_syl_boundary("mathathie", 1, 2)
+        assert result == ("ma", "thathie")
 
     def test_zero_left_returns_none(self):
         assert _split_word_at_syl_boundary("dominus", 0, 3) is None
