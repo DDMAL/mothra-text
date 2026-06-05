@@ -84,6 +84,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--folios", default=FOLIO_DIR)
     parser.add_argument("--output", default=os.path.dirname(OUT_DIR))
+    parser.add_argument("--model", default=None)
     args = parser.parse_args()
 
     out_dir = os.path.join(args.output, "kraken_blla")
@@ -91,6 +92,14 @@ def main():
     paths = load_images(args.folios)
     print(f"Found {len(paths)} image(s)")
     print(f"Output → {out_dir}\n")
+
+    custom_model = None
+    if args.model:
+        from kraken.lib import models as kraken_models
+        custom_model = kraken_models.load_any(args.model)
+        print(f"Model: {args.model}\n")
+
+    model_name = os.path.basename(args.model) if args.model else "kraken_blla"
 
     seg_dir = os.path.join(out_dir, "segmentation")
     os.makedirs(seg_dir, exist_ok=True)
@@ -114,7 +123,7 @@ def main():
                 arr = np.array(pil_img)
                 cv_img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
-        segmentation = blla.segment(pil_img, device="cpu")
+        segmentation = blla.segment(pil_img, model=custom_model, device="cpu")
         n_lines = len(segmentation.lines)
 
         if not os.path.exists(out_path):
@@ -128,7 +137,7 @@ def main():
             "source": os.path.relpath(path, os.path.dirname(out_dir)),
             "image_width": w,
             "image_height": h,
-            "model_name": "kraken_blla",
+            "model_name": model_name,
             "run_date": datetime.now(timezone.utc).isoformat(),
             "lines": [
                 {
