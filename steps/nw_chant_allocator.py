@@ -38,10 +38,19 @@ class ChantSpan:
 
 
 @dataclass
+class MidWordBreak:
+    # The split word is flat_text.words[anchor_word_index - 1].
+    anchor_word_index: int  # index of first word on next line after the break
+    syl_left: int           # syllables of split word on line BEFORE the break
+    syl_right: int          # syllables of split word on line AFTER the break
+
+
+@dataclass
 class FlatTextData:
     words: list[str]
     anchors: list[Anchor]
     chant_spans: list[ChantSpan]
+    mid_word_breaks: list[MidWordBreak] = field(default_factory=list)
     initial_pointer: int = 0
     continuation_words: list[str] = field(default_factory=list)
     has_continuation: bool = False  # True if continuation was prepended
@@ -68,35 +77,102 @@ def _classify_break(break_str: str) -> str:
     return "column_break_777"
 
 
+def _count_syl_groups(volpiano_group: str) -> int:
+    """Count syllable groups (split by --) within a single ---group.
+
+    Safe to split on '--' because a single ---group by construction
+    contains no '---' sequences.
+    """
+    parts = [
+        p for p in volpiano_group.split("--")
+        if re.search(r"[a-zA-Z]", p)
+    ]
+    return max(1, len(parts))
+
+
+def _split_word_at_syl_boundary(
+    word: str, syl_left: int, syl_right: int
+) -> tuple[str, str] | None:
+    """Split word text at a volpiano-derived syllable boundary.
+
+    Returns (left_fragment, right_fragment) where left_fragment contains
+    the first syl_left syllables joined without hyphens, and right_fragment
+    contains the remaining syl_right syllables.  Returns None when the word
+    cannot be split cleanly — e.g. the linguistic syllable count disagrees
+    with syl_left + syl_right, or syllabification raises LatinError.
+    """
+    import unicodedata as _ud
+    try:
+        from volpiano_display_utilities.latin_word_syllabification import (
+            LatinError,
+            split_word_by_syl_bounds,
+            syllabify_word,
+        )
+    except ImportError:
+        return None
+
+    normalized = re.sub(
+        r"[^a-zA-Z]", "",
+        _ud.normalize("NFKD", word).encode("ascii", "ignore").decode(),
+    ).lower()
+    if not normalized:
+        return None
+    try:
+        bounds = syllabify_word(normalized, return_string=False)
+        syllables = split_word_by_syl_bounds(normalized, bounds)
+    except LatinError:
+        return None
+
+    if len(syllables) != syl_left + syl_right:
+        return None
+    if syl_left <= 0 or syl_right <= 0:
+        return None
+
+    left = "".join(s.rstrip("-") for s in syllables[:syl_left])
+    right = "".join(s.rstrip("-") for s in syllables[syl_left:])
+    return left, right
+
+
 def _parse_row_words_and_anchors(
-    text: str, volpiano: str
-) -> tuple[list[str], list[tuple[int, str]], list[str]]:
-    """Parse one chant row's text+volpiano into words and anchors.
+    text: str, volpiano: str,
+) -> tuple[
+    list[str],
+    list[tuple[int, str]],
+    list[str],
+    list[tuple[int, int, int]],
+]:
+    """Parse one chant row's text+volpiano into words, anchors, and breaks.
 
     Also identifies post-77 continuation words for the next folio.
 
     Returns:
-        (this_folio_words, raw_anchors, continuation_words)
+        (this_folio_words, raw_anchors,
+         continuation_words, raw_mid_word_breaks)
 
         - this_folio_words: words on this folio (up to first 77, if any)
         - raw_anchors: [(word_offset, anchor_type), ...] where
           word_offset is the cumulative count AFTER the break
         - continuation_words: words after the first 77 break (belong
           to the next folio; no separate CSV row for these)
+        - raw_mid_word_breaks: [(anchor_word_index, syl_left, syl_right), ...]
+          for each within_chant_7 break that falls mid-word; syl_left and
+          syl_right are the syllable counts on each side of the break
     """
     words = text.split() if text else []
     if not words:
-        return [], [], []
+        return [], [], [], []
     if not volpiano:
-        return words, [], []
+        return words, [], [], []
 
     # Split volpiano keeping breaks: ["seg0", "7+", "seg1", "7+", ...]
     parts = re.split(r"(7+)", volpiano)
 
     word_idx = 0
     raw_anchors: list[tuple[int, str]] = []
+    raw_mid_word_breaks: list[tuple[int, int, int]] = []
     continuation_start: int | None = None
     seg_count = 0  # number of volpiano segments processed so far
+    prev_seg = ""  # previous iteration's segment (used for syl_left)
 
     i = 0
     while i < len(parts):
@@ -119,7 +195,22 @@ def _parse_row_words_and_anchors(
             seg_stripped = re.sub(r"^[1-9]", "", seg)
             if seg_count > 0 and re.match(r"--[^-]", seg_stripped):
                 n -= 1
+                # Record syllable counts on each side of this mid-word break.
+                # Left: syllables in the last ---group of the previous segment.
+                prev_groups = [
+                    g for g in prev_seg.split("---")
+                    if re.search(r"[a-zA-Z]", g)
+                ]
+                last_group = prev_groups[-1] if prev_groups else ""
+                syl_left = _count_syl_groups(last_group)
+                # Right: syllables in the continuation before the first ---.
+                continuation = seg_stripped.split("---")[0]
+                continuation_body = re.sub(r"^--", "", continuation)
+                syl_right = _count_syl_groups(continuation_body)
+                # word_idx is anchor_word_index (before adding n).
+                raw_mid_word_breaks.append((word_idx, syl_left, syl_right))
             word_idx += max(n, 0)
+        prev_seg = seg
         seg_count += 1
 
         # Process the break that follows this segment (if any).
@@ -136,17 +227,23 @@ def _parse_row_words_and_anchors(
     if continuation_start is not None:
         this_folio_words = words[:continuation_start]
         continuation_words = words[continuation_start:]
-        # Drop anchors at or after the continuation boundary
+        # Drop anchors/mid-word breaks at or after the continuation boundary
         # (they describe structure on the next folio, not this one).
         raw_anchors = [
             (wi, at) for wi, at in raw_anchors
             if wi <= continuation_start
         ]
+        raw_mid_word_breaks = [
+            (wi, sl, sr) for (wi, sl, sr) in raw_mid_word_breaks
+            if wi < continuation_start
+        ]
     else:
         this_folio_words = words
         continuation_words = []
 
-    return this_folio_words, raw_anchors, continuation_words
+    return (
+        this_folio_words, raw_anchors, continuation_words, raw_mid_word_breaks
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +287,7 @@ def build_flat_text_and_anchors(
     words: list[str] = []
     anchors: list[Anchor] = []
     chant_spans: list[ChantSpan] = []
+    mid_word_breaks: list[MidWordBreak] = []
     continuation_words: list[str] = []
     has_continuation = False
 
@@ -223,7 +321,7 @@ def build_flat_text_and_anchors(
                 or carry_row.get("fulltext_standardized")
                 or ""
             ).strip()
-            _, _, carry_words = _parse_row_words_and_anchors(
+            _, _, carry_words, _ = _parse_row_words_and_anchors(
                 clean_text(raw_carry),
                 (carry_row.get("volpiano") or "").strip(),
             )
@@ -253,7 +351,7 @@ def build_flat_text_and_anchors(
             continue
 
         volpiano = (row.get("volpiano") or "").strip()
-        row_words, raw_anchors, row_continuation = (
+        row_words, raw_anchors, row_continuation, row_mwbs = (
             _parse_row_words_and_anchors(text, volpiano)
         )
 
@@ -267,6 +365,13 @@ def build_flat_text_and_anchors(
             anchors.append(Anchor(
                 word_index=span_start + word_offset,
                 anchor_type=anchor_type,
+            ))
+
+        for anchor_wi, syl_left, syl_right in row_mwbs:
+            mid_word_breaks.append(MidWordBreak(
+                anchor_word_index=span_start + anchor_wi,
+                syl_left=syl_left,
+                syl_right=syl_right,
             ))
 
         words.extend(row_words)
@@ -294,6 +399,7 @@ def build_flat_text_and_anchors(
         words=words,
         anchors=anchors,
         chant_spans=chant_spans,
+        mid_word_breaks=mid_word_breaks,
         initial_pointer=initial_pointer,
         continuation_words=continuation_words,
         has_continuation=has_continuation,
@@ -411,6 +517,13 @@ def allocate_lines(
 
     # Sort anchors by word_index once for efficient lookup.
     sorted_anchors = sorted(flat_text.anchors, key=lambda a: a.word_index)
+
+    # Index mid-word breaks by anchor_word_index for O(1) lookup.
+    mwb_by_anchor: dict[int, MidWordBreak] = {
+        m.anchor_word_index: m for m in flat_text.mid_word_breaks
+    }
+    # Right-side syllable fragment of a split word, carried to the next line.
+    syllable_prefix: str | None = None
 
     # Heuristic: lowercase first word without prepended continuation
     # suggests the folio may begin mid-chant.
@@ -568,10 +681,42 @@ def allocate_lines(
                     _dbg_alignment = "(alignment unavailable)"
 
         consumed = max(consumed, 0)
-        manifest[label] = " ".join(
+
+        # Assemble this line's word list, optionally prepending a syllable
+        # fragment carried over from a mid-word break on the previous line.
+        assigned_words = list(
             flat_text.words[text_pointer: text_pointer + consumed]
         )
-        text_pointer += consumed
+        if syllable_prefix is not None:
+            assigned_words = [syllable_prefix] + assigned_words
+            syllable_prefix = None
+        manifest_text = " ".join(assigned_words)
+
+        # Check whether the next pointer lands on a mid-word break and, if so,
+        # split the last word of this line at the volpiano syllable boundary.
+        new_pointer = text_pointer + consumed
+        mwb = mwb_by_anchor.get(new_pointer)
+        if mwb is not None and new_pointer > 0:
+            split_word = flat_text.words[new_pointer - 1]
+            split_result = _split_word_at_syl_boundary(
+                split_word, mwb.syl_left, mwb.syl_right
+            )
+            if split_result is not None:
+                left_frag, right_frag = split_result
+                parts_m = manifest_text.split()
+                parts_m[-1] = left_frag
+                manifest_text = " ".join(parts_m)
+                syllable_prefix = right_frag
+            else:
+                flags.append(ValidationFlag(
+                    "mid_word_split_skipped",
+                    f"Line {label}: could not split {split_word!r} "
+                    f"({mwb.syl_left}+{mwb.syl_right} syllables); "
+                    "word left intact on this line",
+                ))
+
+        manifest[label] = manifest_text
+        text_pointer = new_pointer
 
         if debug and debug_lines_out is not None:
             debug_lines_out.append({

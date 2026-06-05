@@ -6,6 +6,7 @@ from steps.nw_chant_allocator import (
     Anchor,
     ChantSpan,
     FlatTextData,
+    MidWordBreak,
     build_flat_text_and_anchors,
 )
 
@@ -236,3 +237,100 @@ class TestInferContinuation:
         )
         assert result.has_continuation is False
         assert result.words == ["epsilon"]
+
+
+class TestMidWordBreaks:
+    """Tests for MidWordBreak population in build_flat_text_and_anchors."""
+
+    def test_clean_word_break_no_mid_word_breaks(self):
+        # '7' at a clean word boundary (segment after 7 starts with '---')
+        # → no MidWordBreak produced.
+        rows = [_row("001r", "1", "alpha beta gamma delta",
+                     volpiano="a---b7---c---d")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.mid_word_breaks == []
+
+    def test_no_volpiano_no_mid_word_breaks(self):
+        rows = [_row("001r", "1", "alpha beta")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.mid_word_breaks == []
+
+    def test_single_mid_word_break_one_syl_each_side(self):
+        # Volpiano: "a---b7--c---d"
+        # seg0 "a---b" → last group "b" → 1 syl left
+        # seg1 "--c---d" → continuation "--c", body "c" → 1 syl right
+        # anchor_word_index = 2 (beta is words[1])
+        rows = [_row("001r", "1", "alpha beta gamma",
+                     volpiano="a---b7--c---d")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert len(result.mid_word_breaks) == 1
+        mwb = result.mid_word_breaks[0]
+        assert mwb.anchor_word_index == 2
+        assert mwb.syl_left == 1
+        assert mwb.syl_right == 1
+
+    def test_mid_word_break_multiple_syls_left(self):
+        # Volpiano: "a---b--c--d7--e---f"
+        # seg0 "a---b--c--d" → last group "b--c--d" → 3 syls left
+        # seg1 "--e---f" → continuation "--e", body "e" → 1 syl right
+        rows = [_row("001r", "1", "alpha beta gamma",
+                     volpiano="a---b--c--d7--e---f")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert len(result.mid_word_breaks) == 1
+        mwb = result.mid_word_breaks[0]
+        assert mwb.anchor_word_index == 2
+        assert mwb.syl_left == 3
+        assert mwb.syl_right == 1
+
+    def test_mid_word_break_multiple_syls_right(self):
+        # Volpiano: "a---b7--c--d---e"
+        # seg0 "a---b" → last group "b" → 1 syl left
+        # seg1 "--c--d---e" → continuation "--c--d", body "c--d" → 2 syls right
+        rows = [_row("001r", "1", "alpha beta gamma",
+                     volpiano="a---b7--c--d---e")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert len(result.mid_word_breaks) == 1
+        mwb = result.mid_word_breaks[0]
+        assert mwb.anchor_word_index == 2
+        assert mwb.syl_left == 1
+        assert mwb.syl_right == 2
+
+    def test_mid_word_break_with_clef_digit(self):
+        # Volpiano: "a---b71--c---d" (clef '1' after '7')
+        # After stripping leading '1', seg1 is "--c---d" → same as one-syl case.
+        rows = [_row("001r", "1", "alpha beta gamma",
+                     volpiano="a---b71--c---d")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert len(result.mid_word_breaks) == 1
+        mwb = result.mid_word_breaks[0]
+        assert mwb.anchor_word_index == 2
+        assert mwb.syl_left == 1
+        assert mwb.syl_right == 1
+
+    def test_mid_word_break_word_index_offset_across_rows(self):
+        # Row 1 contributes 2 words with no breaks.
+        # Row 2 has a mid-word break at row-local anchor_word_index=2.
+        # The global anchor_word_index should be 2+2=4.
+        rows = [
+            _row("001r", "1", "alpha beta",
+                 volpiano="a---b"),
+            _row("001r", "2", "gamma delta epsilon",
+                 volpiano="x---y7--z---w"),
+        ]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert len(result.mid_word_breaks) == 1
+        mwb = result.mid_word_breaks[0]
+        # "delta" = words[3] = words[4-1]
+        assert mwb.anchor_word_index == 4
+        assert mwb.syl_left == 1
+        assert mwb.syl_right == 1
+
+    def test_mid_word_break_dropped_after_77_continuation(self):
+        # Mid-word break that falls after the 77 boundary belongs to the
+        # next folio and must not appear in mid_word_breaks.
+        # Volpiano: "a---b77--c---d" (77 break mid-word)
+        rows = [_row("001r", "1", "alpha beta gamma",
+                     volpiano="a---b77--c---d")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        # The mid-word break is after the 77 → dropped.
+        assert result.mid_word_breaks == []

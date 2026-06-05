@@ -1,10 +1,14 @@
 """Tests for steps.nw_chant_allocator — Sub-plan 4b: allocate_lines."""
 
+from unittest.mock import patch
+
 from steps.nw_chant_allocator import (
     Anchor,
     AllocationResult,
     ChantSpan,
     FlatTextData,
+    MidWordBreak,
+    _split_word_at_syl_boundary,
     allocate_lines,
 )
 
@@ -324,3 +328,137 @@ class TestForceWindow:
         assert any(
             f.flag_type == "nw_volpiano_disagreement" for f in result.flags
         )
+
+
+class TestSplitWordAtSylBoundary:
+    """Unit tests for the _split_word_at_syl_boundary helper."""
+
+    def test_dominus_split_2_1(self):
+        # "dominus" → ["do-", "mi-", "nus"] (3 syllables); split 2+1.
+        result = _split_word_at_syl_boundary("dominus", 2, 1)
+        assert result == ("domi", "nus")
+
+    def test_dominus_split_1_2(self):
+        result = _split_word_at_syl_boundary("dominus", 1, 2)
+        assert result == ("do", "minus")
+
+    def test_count_mismatch_returns_none(self):
+        # 3 syllables total; 2+5=7 ≠ 3.
+        assert _split_word_at_syl_boundary("dominus", 2, 5) is None
+
+    def test_zero_left_returns_none(self):
+        assert _split_word_at_syl_boundary("dominus", 0, 3) is None
+
+    def test_zero_right_returns_none(self):
+        assert _split_word_at_syl_boundary("dominus", 3, 0) is None
+
+    def test_single_syllable_word_mismatch_returns_none(self):
+        # "lux" has 1 syllable; 1+1=2 ≠ 1.
+        assert _split_word_at_syl_boundary("lux", 1, 1) is None
+
+    def test_non_ascii_word_normalised(self):
+        # Accented input is normalised before syllabification.
+        # "dóminus" should behave the same as "dominus".
+        result = _split_word_at_syl_boundary("dóminus", 2, 1)
+        assert result == ("domi", "nus")
+
+
+class TestAllocateLinesWithMidWordBreaks:
+    """Tests for mid-word splitting in allocate_lines."""
+
+    def _mid_word_flat(self, words, anchor_wi, syl_left, syl_right):
+        """FlatTextData with one mid-word break and matching within_chant_7 anchor."""
+        return FlatTextData(
+            words=words,
+            anchors=[Anchor(anchor_wi, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, len(words))],
+            mid_word_breaks=[MidWordBreak(anchor_wi, syl_left, syl_right)],
+        )
+
+    def test_stub_mode_split_applied(self):
+        # Stub mode (no OCR): line0 snaps to anchor at word 2; "beta" is the
+        # split word.  _split_word_at_syl_boundary is mocked to return ("be", "ta").
+        words = ["alpha", "beta", "gamma"]
+        flat = self._mid_word_flat(words, anchor_wi=2, syl_left=1, syl_right=1)
+        with patch(
+            "steps.nw_chant_allocator._split_word_at_syl_boundary",
+            return_value=("be", "ta"),
+        ):
+            result = allocate_lines(
+                flat, ["line0", "line1"], {"line0": "", "line1": ""}
+            )
+        assert result.manifest["line0"] == "alpha be"
+        assert result.manifest["line1"] == "ta gamma"
+        assert not any(
+            f.flag_type == "mid_word_split_skipped" for f in result.flags
+        )
+
+    def test_nw_mode_split_applied(self):
+        # NW mode: OCR snaps to the anchor; split fires for the boundary word.
+        words = ["alpha", "beta", "gamma"]
+        flat = self._mid_word_flat(words, anchor_wi=2, syl_left=1, syl_right=1)
+        with patch(
+            "steps.nw_chant_allocator._split_word_at_syl_boundary",
+            return_value=("be", "ta"),
+        ):
+            result = allocate_lines(
+                flat,
+                ["line0", "line1"],
+                {"line0": "alpha", "line1": "gamma"},
+                snap_window=1,
+            )
+        assert result.manifest["line0"] == "alpha be"
+        assert result.manifest["line1"] == "ta gamma"
+
+    def test_split_skipped_when_helper_returns_none(self):
+        # When _split_word_at_syl_boundary returns None, word stays intact
+        # and a "mid_word_split_skipped" flag is emitted.
+        words = ["alpha", "beta", "gamma"]
+        flat = self._mid_word_flat(words, anchor_wi=2, syl_left=1, syl_right=1)
+        with patch(
+            "steps.nw_chant_allocator._split_word_at_syl_boundary",
+            return_value=None,
+        ):
+            result = allocate_lines(
+                flat, ["line0", "line1"], {"line0": "", "line1": ""}
+            )
+        assert "beta" in result.manifest["line0"]
+        assert any(
+            f.flag_type == "mid_word_split_skipped" for f in result.flags
+        )
+
+    def test_no_split_when_no_mid_word_breaks(self):
+        # Clean word break with no MidWordBreaks → manifest unchanged.
+        words = ["alpha", "beta", "gamma"]
+        flat = FlatTextData(
+            words=words,
+            anchors=[Anchor(2, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, 3)],
+        )
+        result = allocate_lines(
+            flat, ["line0", "line1"], {"line0": "", "line1": ""}
+        )
+        assert result.manifest["line0"] == "alpha beta"
+        assert result.manifest["line1"] == "gamma"
+        assert not any(
+            f.flag_type == "mid_word_split_skipped" for f in result.flags
+        )
+
+    def test_syllable_prefix_not_applied_when_no_break(self):
+        # Ensure syllable_prefix starts None and doesn't bleed into unrelated lines.
+        words = ["alpha", "beta", "gamma", "delta"]
+        flat = FlatTextData(
+            words=words,
+            anchors=[
+                Anchor(2, "within_chant_7"),
+                Anchor(4, "within_chant_7"),
+            ],
+            chant_spans=[ChantSpan(1, 0, 4)],
+        )
+        result = allocate_lines(
+            flat,
+            ["line0", "line1"],
+            {"line0": "", "line1": ""},
+        )
+        assert result.manifest["line0"] == "alpha beta"
+        assert result.manifest["line1"] == "gamma delta"
