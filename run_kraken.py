@@ -95,8 +95,10 @@ def main():
 
     custom_model = None
     if args.model:
-        from kraken.lib import models as kraken_models
-        custom_model = kraken_models.load_any(args.model)
+        from kraken.lib import vgsl
+        custom_model = vgsl.TorchVGSLModel.load_model(args.model)
+        if 'hyper_params' not in custom_model.user_metadata:
+            custom_model.user_metadata['hyper_params'] = {}
         print(f"Model: {args.model}\n")
 
     model_name = os.path.basename(args.model) if args.model else "kraken_blla"
