@@ -95,8 +95,13 @@ def main():
 
     custom_model = None
     if args.model:
-        from kraken.lib import vgsl
-        custom_model = vgsl.TorchVGSLModel.load_model(args.model)
+        ext = os.path.splitext(args.model)[1].lower()
+        if ext == '.safetensors':
+            from kraken.models.loaders import load_safetensors
+            custom_model = load_safetensors(args.model)[0]
+        else:
+            from kraken.lib import vgsl
+            custom_model = vgsl.TorchVGSLModel.load_model(args.model)
         if 'hyper_params' not in custom_model.user_metadata:
             custom_model.user_metadata['hyper_params'] = {}
         print(f"Model: {args.model}\n")
