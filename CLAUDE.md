@@ -1,5 +1,20 @@
 # CLAUDE.md — mothra-text / line-seg-eval
 
+## Python environment
+
+All pipeline code (`run_pipeline.py`, `run_kraken.py`, etc.) must be run with the
+`line-seg-eval` conda environment. **Do not use `conda run -n line-seg-eval python`** —
+pyenv intercepts the `python` command and uses `/Users/cassiebastress/.pyenv/versions/3.12.6/`
+instead of the conda env, which is missing `htrflow` and other dependencies.
+
+Always invoke Python directly via the full path:
+```
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python
+```
+
+The pyenv Python 3.12 has `kraken` installed but lacks `htrflow`, `biopython`, and
+`volpiano-display-utilities`. The conda env Python 3.10 has everything.
+
 ## Documentation rule
 
 Before committing any code change, update the relevant documentation:
