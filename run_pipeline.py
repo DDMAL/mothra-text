@@ -181,6 +181,7 @@ def run(
     folio: str,
     source_id: int | None = None,
     csv_path: str | None = None,
+    segmentation_model: str | None = None,
     recognition_model: str | None = None,
     device: str = "cpu",
     line_offset: int = 0,
@@ -224,7 +225,7 @@ def run(
 
     # Stage 1: Kraken BLLA line segmentation
     logger.info("Stage 1: Kraken line segmentation")
-    collection = KrakenSegmentation(device=device).run(collection)
+    collection = KrakenSegmentation(device=device, model=segmentation_model).run(collection)
     n_lines = sum(1 for _ in collection.active_leaves())
     logger.info("  %d line nodes", n_lines)
 
@@ -454,6 +455,11 @@ def main() -> None:
                                 "cantusdatabase.org).")
     csv_group.add_argument("--csv", metavar="PATH",
                            help="Path to a local Cantus-format CSV file.")
+    parser.add_argument("--segmentation-model", default=None,
+                        metavar="PATH",
+                        help="Local path to a custom Kraken BLLA segmentation "
+                             "model (.mlmodel or .safetensors). Omit to use "
+                             "Kraken's built-in default BLLA model.")
     parser.add_argument("--recognition-model", default=None,
                         metavar="MODEL_ID_OR_PATH",
                         help="HuggingFace model ID or local path to a Kraken "
@@ -510,6 +516,7 @@ def main() -> None:
         folio=args.folio,
         source_id=args.source_id,
         csv_path=args.csv,
+        segmentation_model=args.segmentation_model,
         recognition_model=args.recognition_model,
         device=args.device,
         line_offset=args.line_offset,

@@ -7,10 +7,12 @@ on medieval chant manuscripts.
 ## Steps overview
 
 ```
-KrakenSegmentation  →  cluster_columns / fuse_colinear_segments
+KrakenSegmentation  →  cluster_columns
                     →  KrakenRecognition
+                    →  fuse_colinear_segments
                     →  allocate_lines (NW chant allocator)
                     →  GroundTruthWordSegmentation
+                    →  SyllableSegmentation
 ```
 
 ---
@@ -69,10 +71,15 @@ importable.
 
 ## `kraken_segmentation.py`
 
-### `KrakenSegmentation(device="cpu")`
+### `KrakenSegmentation(device="cpu", model=None)`
 
 HTRflow pipeline step wrapping Kraken's BLLA baseline segmenter. Produces line-level
-polygon nodes from a folio image. Uses Kraken's built-in default BLLA model.
+polygon nodes from a folio image.
+
+- **Default mode** (`model=None`): uses Kraken's built-in BLLA model.
+- **Custom model** (`model="path/to/model"`): accepts a local path to a `.mlmodel`
+  (CoreML) or `.safetensors` file. The model is loaded once at construction time and
+  reused across all pages in the collection.
 
 ---
 
@@ -115,8 +122,8 @@ Builds `FlatTextData` from a Cantus CSV:
 
 Assigns a word fragment from `flat_text` to each line label via NW alignment:
 
-- Uses `Bio.Align.PairwiseAligner` with affine gap penalties calibrated for medieval
-  chant (match 8, mismatch −5, gap open −7, gap extend −3).
+- Uses `Bio.Align.PairwiseAligner` (requires `biopython`) with affine gap penalties
+  calibrated for medieval chant (match 8, mismatch −5, gap open −7, gap extend −3).
 - Advances a `text_pointer` through `flat_text.words` as each line is processed.
 - Snaps the pointer to the nearest `within_chant_7` or `page_break_77` anchor when NW
   result is within `snap_window` words of it (default 2); emits `nw_volpiano_disagreement`
@@ -136,6 +143,29 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
 Builds, serialises, and deserialises a `FolioState` JSON sidecar after each folio run.
 `remaining_words` captures post-77 continuation words (or the unconsumed flat_text
 tail) for use as `prev_folio_state` on the next folio run.
+
+---
+
+## `syllable_segmentation.py`
+
+### `SyllableSegmentation()`
+
+HTRflow pipeline step that subdivides each word-level node into character-proportional
+syllable regions. Operates after `GroundTruthWordSegmentation` on the word-level active
+leaves.
+
+- Normalises word text to plain lowercase ASCII (NFKD decomposition + ASCII
+  transliteration) before syllabification to handle accented vowels and ligatures
+  (`æ`, `œ`, etc.) from Cantus `fulltext_ms` fields.
+- Delegates to `syllabify_word` / `split_word_by_syl_bounds` from
+  `volpiano-display-utilities`. Non-final syllables carry a trailing hyphen
+  (e.g. `["do-", "mi-", "nus"]`).
+- Falls back to treating the whole word as a single syllable on `LatinError` or
+  empty normalisation; always produces at least one child per word node.
+- Bounding boxes are laid out character-proportionally within the word node's
+  coordinate space.
+
+Requires `volpiano-display-utilities` (`pip install volpiano-display-utilities`).
 
 ---
 

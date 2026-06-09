@@ -57,14 +57,16 @@ python page_viewer.py image.jpg annotation.xml # pre-load both on startup
 
 1. **Kraken BLLA** — baseline line segmentation
 2. **Column clustering** — auto-detect 1 vs 2 columns; sort lines into reading order
-3. **Co-linear segment fusion** — fuse BLLA sub-segments that belong to the same physical
-   text line (identified by ≥50% y-extent overlap), correcting BLLA over-segmentation on
-   chant manuscripts with neume notation
-4. **Kraken HTR** — text recognition per fused line
+3. **Kraken HTR** — text recognition per line node
+4. **Co-linear segment fusion** — fuse BLLA sub-segments that belong to the same physical
+   text line (identified by ≥50% y-extent overlap) into logical lines before NW alignment,
+   correcting BLLA over-segmentation on chant manuscripts with neume notation
 5. **NW chant allocator** — align Cantus CSV text to detected lines via Needleman-Wunsch,
    using volpiano break markers as alignment anchors; supports folio-to-folio continuation
    via CSV backward-lookup and optional JSON sidecar (`--folio-state-out`)
 6. **GT word segmentation** — distribute Cantus words across each line's pixel extent
+7. **Syllable segmentation** — subdivide each word node into character-proportional
+   syllable regions using Latin syllabification from `volpiano-display-utilities`
 
 See [`steps/README.md`](steps/README.md) for details on each step.
 
@@ -80,9 +82,10 @@ python run_pipeline.py \
 
 Key flags:
 - `--source-id` or `--csv` — Cantus source (fetched or local)
+- `--segmentation-model` — custom Kraken BLLA model (`.mlmodel` or `.safetensors`); omit to use Kraken's built-in default
 - `--recognition-model` — Kraken HTR model; omit for stub mode (empty text, pipeline still completes)
-- `--line-offset N` — skip first N Cantus lines (for cropped images)
-- `--prev-folio-state` / `--folio-state-out` — pass post-77 continuation words between folio runs
+- `--line-offset N` — skip first N volpiano line-break markers before aligning (for cropped images)
+- `--prev-folio-state` / `--folio-state-out` — pass post-77 continuation words (or unconsumed tail) between folio runs
 - `--export-json` — write output for the Pipeline Inspector GUI
 - `--debug-ocr` — print per-line OCR transcripts and NW alignment detail to stdout
 
@@ -152,7 +155,7 @@ See [DDMAL/ddmal_hfsync](https://github.com/DDMAL/ddmal_hfsync) for setup instru
 conda create -n line-seg-eval python=3.10 -y
 conda activate line-seg-eval
 
-pip install htrflow kraken
+pip install htrflow kraken biopython volpiano-display-utilities
 
 # OpenMMLab stack for htrflow's RTMDet adapter
 pip install yapf==0.40.1 mmengine --no-build-isolation

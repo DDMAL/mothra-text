@@ -42,10 +42,26 @@ class KrakenSegmentation(_PipelineStepBase):
     Args:
         device: Kraken inference device string, e.g. ``"cpu"`` or
             ``"cuda"``. Defaults to ``"cpu"``.
+        model: Optional path to a custom BLLA segmentation model. Accepts
+            ``.mlmodel`` (CoreML) or ``.safetensors`` format. When ``None``
+            (default) Kraken's built-in BLLA model is used.
     """
 
-    def __init__(self, device: str = "cpu"):
+    def __init__(self, device: str = "cpu", model: str = None):
         self.device = device
+        self._model = None
+        if model:
+            import os
+            ext = os.path.splitext(model)[1].lower()
+            if ext == '.safetensors':
+                from kraken.models.loaders import load_safetensors
+                self._model = load_safetensors(model)[0]
+            else:
+                from kraken.lib import vgsl
+                self._model = vgsl.TorchVGSLModel.load_model(model)
+            if 'hyper_params' not in self._model.user_metadata:
+                self._model.user_metadata['hyper_params'] = {}
+            logger.info("Loaded custom segmentation model: %s", model)
 
     def run(self, collection: Collection) -> Collection:
         results = []
@@ -53,7 +69,7 @@ class KrakenSegmentation(_PipelineStepBase):
             # HTRflow loads images as BGR (cv2.imread); convert to RGB for PIL.
             bgr = page.image
             pil_img = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-            seg = blla.segment(pil_img, device=self.device)
+            seg = blla.segment(pil_img, model=self._model, device=self.device)
 
             polygons = [
                 line.boundary
