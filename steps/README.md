@@ -135,8 +135,15 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
   Set `force_window=0` to disable entirely.
 - Hard-resets the pointer to the nearest `column_break_777` anchor at the start of
   column 2 (when `column_count=2`).
+- **Stub mode** (when OCR texts are all empty, i.e. no `--recognition-model` was
+  supplied): each line advances to the next anchor of any type instead of running NW.
+  When no anchor is available (e.g. all chants on the folio lack volpiano), remaining
+  words are distributed uniformly across remaining lines — `floor(remaining_words /
+  remaining_lines)` per line, with the last line receiving any leftover words.
 - Emits `continuation_missing` when the first word of `flat_text` is lowercase and
-  `flat_text.has_continuation` is False.
+  `flat_text.has_continuation` is False. The flag detail now also mentions that absent
+  volpiano on the preceding folio prevents automatic inference and instructs the user
+  to chain runs via `--folio-state-out` / `--prev-folio-state`.
 
 ### `build_folio_state / write_folio_state / read_folio_state`
 
@@ -197,7 +204,7 @@ conda activate line-seg-eval
 pytest tests/ -v
 ```
 
-177 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
+179 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
 `test_nw_alignment.py`, `test_nw_folio_state.py`, and others.
 
 ---
@@ -216,3 +223,7 @@ pytest tests/ -v
   model is trained.
 - **Volpiano coverage.** Volpiano notation is absent for roughly 60–70% of Cantus
   chants. Lines without volpiano anchors rely on NW alone, with no snap behaviour.
+  `build_flat_text_and_anchors` emits a `logger.warning` summary when any chant rows
+  on the folio lack volpiano (e.g. "3 of 7 chant row(s) on folio '006r' have no
+  volpiano"). In stub mode, lines without anchors now receive a uniform share of
+  remaining words instead of the previous 1-word-per-line fallback.

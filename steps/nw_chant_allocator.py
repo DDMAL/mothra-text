@@ -20,8 +20,11 @@ runs.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -342,6 +345,7 @@ def build_flat_text_and_anchors(
     ]
     folio_rows.sort(key=lambda r: int(r.get("sequence") or 0))
 
+    no_volpiano_count = 0
     for row in folio_rows:
         raw_text = (
             row.get("fulltext_ms") or row.get("fulltext_standardized") or ""
@@ -351,6 +355,8 @@ def build_flat_text_and_anchors(
             continue
 
         volpiano = (row.get("volpiano") or "").strip()
+        if not volpiano:
+            no_volpiano_count += 1
         row_words, raw_anchors, row_continuation, row_mwbs = (
             _parse_row_words_and_anchors(text, volpiano)
         )
@@ -385,6 +391,13 @@ def build_flat_text_and_anchors(
             continuation_words = row_continuation
             # No more rows contribute to this folio after a 77 break.
             break
+
+    if no_volpiano_count:
+        logger.warning(
+            "%d of %d chant row(s) on folio %r have no volpiano; "
+            "NW alignment only for those rows (no line-break anchors available)",
+            no_volpiano_count, len(folio_rows), folio,
+        )
 
     # Advance initial_pointer past the first line_offset within_chant_7 breaks.
     initial_pointer = 0
@@ -463,7 +476,9 @@ def allocate_lines(
 
     When model=None was used for KrakenRecognition, all OCR texts will
     be empty strings.  In stub mode each line is advanced to the next
-    anchor position so the pipeline can complete end-to-end.
+    anchor position.  When no anchor is available (e.g. all chants on
+    the folio lack volpiano), remaining words are distributed uniformly
+    across remaining lines rather than assigning 1 word per line.
 
     Args:
         flat_text:          Output of build_flat_text_and_anchors().
@@ -545,8 +560,10 @@ def allocate_lines(
         flags.append(ValidationFlag(
             "continuation_missing",
             f"First word of folio is lowercase ({flat_text.words[0]!r}); "
-            "consider providing --prev-folio-state "
-            "if this folio starts mid-chant",
+            "folio may start mid-chant. If the preceding folio lacked "
+            "volpiano, automatic continuation inference was skipped — "
+            "run the preceding folio with --folio-state-out and pass "
+            "the result via --prev-folio-state.",
         ))
 
     for label_idx, label in enumerate(sorted_labels):
@@ -608,10 +625,16 @@ def allocate_lines(
                 (a for a in sorted_anchors if a.word_index > text_pointer),
                 None,
             )
-            consumed = (
-                (next_anchor.word_index - text_pointer)
-                if next_anchor else 1
-            )
+            if next_anchor is not None:
+                consumed = next_anchor.word_index - text_pointer
+            else:
+                # No anchor available (all chants on this folio lack volpiano).
+                # Distribute remaining words uniformly across remaining lines
+                # so the manifest is populated rather than assigning 1 word
+                # per line (the previous fallback).
+                remaining_lines = len(sorted_labels) - label_idx
+                remaining_words_count = len(flat_text.words) - text_pointer
+                consumed = max(1, remaining_words_count // max(remaining_lines, 1))
         else:
             # Find word count maximising NW score / geometric mean of lengths.
             best_norm = float("-inf")

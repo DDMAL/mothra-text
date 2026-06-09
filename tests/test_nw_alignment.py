@@ -56,9 +56,39 @@ class TestAllocateLinesStubMode:
         assert result.text_pointer_end == 4
 
     def test_stub_no_anchor_consumes_one_word(self):
+        # Single line, single word, no anchors: max(1, 1//1) = 1 word.
         flat = _flat(["word"])
         result = allocate_lines(flat, ["line0"], {"line0": ""})
         assert result.manifest["line0"] == "word"
+
+    def test_stub_no_anchor_distributes_uniformly(self):
+        # 3 lines, 9 words, no anchors: each line gets floor(9/3)=3 words.
+        words = [f"w{i}" for i in range(9)]
+        flat = _flat(words)
+        result = allocate_lines(
+            flat,
+            ["line0", "line1", "line2"],
+            {"line0": "", "line1": "", "line2": ""},
+        )
+        assert result.manifest["line0"] == "w0 w1 w2"
+        assert result.manifest["line1"] == "w3 w4 w5"
+        assert result.manifest["line2"] == "w6 w7 w8"
+        assert result.text_pointer_end == 9
+
+    def test_stub_no_anchor_last_line_gets_remainder(self):
+        # 10 words, 3 lines, no anchors: floor(10/3)=3 per line;
+        # the last line consumes all remaining words (4, not 3).
+        words = [f"w{i}" for i in range(10)]
+        flat = _flat(words)
+        result = allocate_lines(
+            flat,
+            ["line0", "line1", "line2"],
+            {"line0": "", "line1": "", "line2": ""},
+        )
+        assert result.manifest["line0"] == "w0 w1 w2"
+        assert result.manifest["line1"] == "w3 w4 w5"
+        assert result.manifest["line2"] == "w6 w7 w8 w9"
+        assert result.text_pointer_end == 10
 
     def test_stub_missing_label_treated_as_empty_ocr(self):
         words = ["a", "b"]
