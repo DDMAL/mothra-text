@@ -204,7 +204,7 @@ conda activate line-seg-eval
 pytest tests/ -v
 ```
 
-179 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
+202 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
 `test_nw_alignment.py`, `test_nw_folio_state.py`, and others.
 
 ---
