@@ -22,6 +22,10 @@ The viewer shows:
 - Toggle each layer on/off with the buttons in the top bar
 - Pan and zoom with scroll and drag
 
+Each word in the JSON carries a `source` field: `"gt"` when the line was assigned Cantus
+ground-truth text by the NW allocator, `"fallback"` when it was not (line received no
+Cantus text and word boundaries came from the OCR output instead).
+
 ---
 
 ## Generating the pipeline JSON
@@ -33,6 +37,7 @@ python run_pipeline.py \
     --image path/to/folio.jpg \
     --source-id <cantus_source_id> \
     --folio "006r" \
+    --recognition-model path/to/model.mlmodel \
     --export-json path/to/output.json
 ```
 
@@ -43,10 +48,16 @@ python run_pipeline.py \
     --image path/to/folio.jpg \
     --csv path/to/manuscript.csv \
     --folio "001r" \
+    --recognition-model path/to/model.mlmodel \
     --export-json path/to/output.json
 ```
 
 `--source-id` and `--csv` are mutually exclusive; exactly one is required.
+
+`--recognition-model` is optional. Omitting it runs in **stub mode**: OCR text is empty,
+NW alignment uses volpiano anchors only, and word boxes are placed from Cantus ground
+truth alone. Stub mode is useful for testing segmentation and JSON export without a
+trained model.
 
 If the image is a crop starting partway through the folio, use `--line-offset N`
 to skip the first N Cantus lines before aligning with detected line nodes:

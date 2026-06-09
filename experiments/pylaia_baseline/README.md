@@ -7,8 +7,8 @@ comparing pre-trained PyLaia models before any fine-tuning.
 
 | Model | Directory | Output |
 |---|---|---|
-| [`Teklia/pylaia-home-alcar`](https://huggingface.co/Teklia/pylaia-home-alcar) | [pylaia_home_alcar/](pylaia_home_alcar/README.md) | `outputs/pylaia_baseline/` |
-| [`Teklia/pylaia-himanis`](https://huggingface.co/Teklia/pylaia-himanis) | [pylaia_himanis/](pylaia_himanis/README.md) | `outputs/pylaia_himanis/` |
+| [`Teklia/pylaia-home-alcar`](https://huggingface.co/Teklia/pylaia-home-alcar) | [pylaia_home_alcar/](pylaia_home_alcar/README.md) | `outputs/pylaia_baseline/pylaia_home_alcar/` |
+| [`Teklia/pylaia-himanis`](https://huggingface.co/Teklia/pylaia-himanis) | [pylaia_himanis/](pylaia_himanis/README.md) | `outputs/pylaia_baseline/pylaia_himanis/` |
 
 ## Shared infrastructure
 
