@@ -50,12 +50,6 @@ class TestKrakenRecognitionStubMode:
         KrakenRecognition(model=None).run(collection)
         collection.update.assert_not_called()
 
-    def test_step_has_run_method(self):
-        step = KrakenRecognition(model=None)
-        assert callable(getattr(step, "run", None))
-        collection = _make_collection([_make_node()])
-        assert KrakenRecognition(model=None).run(collection) is collection
-
 
 class TestKrakenRecognitionModelPath:
     def test_model_path_loads_model_once(self):

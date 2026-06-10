@@ -120,9 +120,6 @@ class TestCleanText:
     def test_empty_string(self):
         assert clean_text("") == ""
 
-    def test_none_like_empty(self):
-        assert clean_text("") == ""
-
     def test_pipe_with_no_spaces(self):
         assert clean_text("hello|world") == "hello|world"  # only ` | ` is stripped
 
