@@ -144,6 +144,42 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
   `flat_text.has_continuation` is False. The flag detail now also mentions that absent
   volpiano on the preceding folio prevents automatic inference and instructs the user
   to chain runs via `--folio-state-out` / `--prev-folio-state`.
+- **No-volpiano folio-start location** (`locate_folio_start=True`, default): when
+  `flat_text.anchors` is empty (no volpiano on any chant row) and at least one OCR
+  line is non-empty, runs `locate_first_chant_line()` to find the OCR line whose text
+  best matches the opening words of the first folio chant (the first `ChantSpan` with
+  `sequence > 0`). Lines before that line (L\*) are treated as the previous folio's
+  bleeding continuation:
+  - If `flat_text.has_continuation` is True, NW-aligns the continuation words against
+    the pre-start lines, then force-snaps the last pre-start line to consume any
+    remaining continuation words (mirrors the `column_break_777` force-close pattern).
+  - If `flat_text.has_continuation` is False, the **pre-start suffix alignment** runs
+    (see below); if it is disabled or scores below threshold, pre-start lines receive
+    empty manifest entries.
+  - The pointer is hard-reset to `first_folio_span.start_word` at L\* before the
+    normal folio NW pass begins.
+  - Emits `folio_start_detected` (informational, detail includes L\* and score) when
+    L\* > 0, or `folio_start_not_located` (fallback to line 0) when every OCR line
+    scores below `folio_start_min_score` (default 0.0).
+  - Set `locate_folio_start=False` to disable, or raise `folio_start_min_score` to
+    require a stronger match.  `folio_start_n_probe` (default 8) controls how many
+    words of the first folio chant are used as the probe string.
+  - Works at line granularity; if the first chant begins mid-line, L\* points to
+    that mixed line (known approximation).
+- **Pre-start suffix alignment** (`pre_start_suffix_align=True`, default): when
+  `has_continuation=False` and `folio_start_line > 0` (pre-start lines were found),
+  assigns CSV ground-truth text to those pre-start lines by aligning their
+  concatenated OCR against the preceding folio's last chant text. The preceding
+  folio's last chant is stored in `FlatTextData.suffix_probe_words` (populated by
+  `build_flat_text_and_anchors` when no `77` continuation was found). A semi-global
+  NW alignment with free left gaps on the target finds the split index `k*` — the
+  word in the preceding chant where this folio's bleed-over begins — and then
+  distributes `chant_words[k*:]` across the pre-start lines using forward NW, with
+  force-snap on the last pre-start line. Emits `suffix_alignment_detected` (with
+  word offset and score) on success, or `suffix_alignment_skipped` when the score
+  is below `pre_start_suffix_min_score` (default 0.0), in which case pre-start
+  lines fall back to empty manifest entries. Set `pre_start_suffix_align=False` to
+  disable entirely.
 
 ### `build_folio_state / write_folio_state / read_folio_state`
 

@@ -57,6 +57,7 @@ class FlatTextData:
     initial_pointer: int = 0
     continuation_words: list[str] = field(default_factory=list)
     has_continuation: bool = False  # True if continuation was prepended
+    suffix_probe_words: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +409,37 @@ def build_flat_text_and_anchors(
         if line_offset <= len(within_anchors):
             initial_pointer = within_anchors[line_offset - 1].word_index
 
+    # When no continuation was found, try to build a suffix probe from the
+    # immediately preceding folio's last chant row.  Used by allocate_lines
+    # to assign CSV ground-truth text to pre-start lines via suffix NW.
+    suffix_probe_words: list[str] = []
+    if not has_continuation and infer_continuation:
+        target_key = _folio_sort_key(folio)
+        preceding_rows = [
+            r for r in csv_rows
+            if _folio_sort_key(r.get("folio", "")) < target_key
+            and r.get("mode", "").strip() != "*"
+        ]
+        if preceding_rows:
+            max_key = max(
+                _folio_sort_key(r.get("folio", "")) for r in preceding_rows
+            )
+            last_folio_rows = sorted(
+                [r for r in preceding_rows
+                 if _folio_sort_key(r.get("folio", "")) == max_key],
+                key=lambda r: int(r.get("sequence") or 0),
+            )
+            suffix_row = last_folio_rows[-1]
+            raw_suffix = (
+                suffix_row.get("fulltext_ms")
+                or suffix_row.get("fulltext_standardized")
+                or ""
+            ).strip()
+            if raw_suffix:
+                suffix_probe_words, _, _, _ = _parse_row_words_and_anchors(
+                    clean_text(raw_suffix), ""
+                )
+
     return FlatTextData(
         words=words,
         anchors=anchors,
@@ -416,6 +448,7 @@ def build_flat_text_and_anchors(
         initial_pointer=initial_pointer,
         continuation_words=continuation_words,
         has_continuation=has_continuation,
+        suffix_probe_words=suffix_probe_words,
     )
 
 
@@ -451,6 +484,86 @@ def _chant_starts_in_range(
     return any(start < span.start_word <= end for span in chant_spans)
 
 
+def locate_first_chant_line(
+    flat_text: FlatTextData,
+    sorted_labels: list[str],
+    ocr_texts: dict[str, str],
+    aligner=None,
+    n_probe_words: int = 8,
+) -> tuple[int, float] | None:
+    """Return (line_index, normalised_score) for the best NW-matching OCR line.
+
+    Searches for the line in sorted_labels whose OCR text best matches the
+    opening words of the first folio chant (the first ChantSpan with
+    sequence > 0).  Used in no-volpiano mode to estimate where this folio's
+    content actually begins on the page, independent of has_continuation.
+
+    Works at line granularity.  When the first folio chant begins mid-line
+    (the previous chant ends partway through a physical line), the returned
+    index points to that mixed line — a known approximation.
+
+    Args:
+        flat_text:      Output of build_flat_text_and_anchors().
+        sorted_labels:  Line node labels in reading order.
+        ocr_texts:      {label: ocr_string} mapping.
+        aligner:        Bio.Align.PairwiseAligner to reuse.  When None, a
+                        default aligner with the same scoring params as
+                        allocate_lines() is constructed internally.
+        n_probe_words:  Number of words from the first folio chant to use
+                        as the probe string (default 8).
+
+    Returns:
+        (line_index, normalised_score) for the best-matching line, or None
+        when no folio chant span (sequence > 0) exists, no probe words are
+        available, or every OCR line is empty.
+    """
+    from math import sqrt
+
+    first_folio_span = next(
+        (s for s in flat_text.chant_spans if s.sequence > 0), None
+    )
+    if first_folio_span is None:
+        return None
+
+    span_start = first_folio_span.start_word
+    probe_words = flat_text.words[span_start:span_start + n_probe_words]
+    if not probe_words:
+        return None
+
+    probe_text = " ".join(probe_words)
+
+    if aligner is None:
+        from Bio.Align import PairwiseAligner as _PA
+        _al = _PA()
+        _al.mode = "global"
+        _al.match_score = 8.0
+        _al.mismatch_score = -5.0
+        _al.open_gap_score = -7.0
+        _al.extend_gap_score = -3.0
+        aligner = _al
+
+    best_score = float("-inf")
+    best_idx = 0
+    any_ocr = False
+
+    for i, label in enumerate(sorted_labels):
+        ocr = (ocr_texts.get(label) or "").strip()
+        if not ocr:
+            continue
+        any_ocr = True
+        raw = aligner.score(ocr, probe_text)
+        denom = sqrt(len(ocr) * len(probe_text))
+        norm = raw / denom if denom > 0 else float("-inf")
+        if norm > best_score:
+            best_score = norm
+            best_idx = i
+
+    if not any_ocr:
+        return None
+
+    return best_idx, best_score
+
+
 def allocate_lines(
     flat_text: FlatTextData,
     sorted_labels: list[str],
@@ -465,6 +578,11 @@ def allocate_lines(
     open_penalty: float = -7.0,
     extend_penalty: float = -3.0,
     debug: bool = False,
+    locate_folio_start: bool = True,
+    folio_start_n_probe: int = 8,
+    folio_start_min_score: float = 0.0,
+    pre_start_suffix_align: bool = True,
+    pre_start_suffix_min_score: float = 0.0,
 ) -> AllocationResult:
     """Align OCR text for each line against flat_text using NW alignment.
 
@@ -509,6 +627,32 @@ def allocate_lines(
         debug:              When True, populate AllocationResult.
                             debug_lines with per-line OCR and NW
                             alignment detail.
+        locate_folio_start: When True (default), attempt to locate
+                            where this folio's first chant begins on
+                            the page.  Only activates in no-volpiano
+                            mode (flat_text.anchors empty) with at
+                            least one non-empty OCR line.  Lines
+                            before L* are treated as the previous
+                            folio's bleeding continuation.
+        folio_start_n_probe: Words from the first folio chant used as
+                            the NW probe string (default 8).
+        folio_start_min_score: Minimum normalised NW score to accept
+                            the located line.  When no line reaches
+                            this threshold a folio_start_not_located
+                            flag is emitted and alignment reverts to
+                            line 0 (default 0.0, i.e. net-positive).
+        pre_start_suffix_align: When True (default), attempt to assign
+                            CSV text to pre-start lines by aligning the
+                            concatenated pre-start OCR against the
+                            preceding folio's last chant (stored in
+                            flat_text.suffix_probe_words).  Only
+                            activates when has_continuation=False and
+                            folio_start_line > 0.
+        pre_start_suffix_min_score: Quality gate for the suffix
+                            alignment score.  Below this threshold a
+                            suffix_alignment_skipped flag is emitted
+                            and pre-start lines fall back to ""
+                            (default 0.0).
 
     Returns:
         AllocationResult with manifest, validation flags, and
@@ -566,6 +710,99 @@ def allocate_lines(
             "the result via --prev-folio-state.",
         ))
 
+    # No-volpiano folio-start location.
+    # Find the first ChantSpan with sequence > 0 (the first real chant of
+    # this folio, as opposed to the continuation span from the previous folio).
+    first_folio_span = next(
+        (s for s in flat_text.chant_spans if s.sequence > 0), None
+    )
+    folio_start_line = 0
+    if (
+        locate_folio_start
+        and not flat_text.anchors
+        and first_folio_span is not None
+        and any((ocr_texts.get(lbl) or "").strip() for lbl in sorted_labels)
+    ):
+        loc = locate_first_chant_line(
+            flat_text, sorted_labels, ocr_texts,
+            aligner=aligner, n_probe_words=folio_start_n_probe,
+        )
+        if loc is not None:
+            candidate_line, loc_score = loc
+            if loc_score >= folio_start_min_score:
+                folio_start_line = candidate_line
+                if folio_start_line > 0:
+                    flags.append(ValidationFlag(
+                        "folio_start_detected",
+                        f"First folio chant located at line index "
+                        f"{folio_start_line} (score={loc_score:.3f}); "
+                        f"{folio_start_line} pre-start line(s) assigned "
+                        "to previous folio's continuation.",
+                    ))
+            else:
+                flags.append(ValidationFlag(
+                    "folio_start_not_located",
+                    f"No OCR line matched the first folio chant with "
+                    f"score >= {folio_start_min_score} "
+                    f"(best={loc_score:.3f}); reverting to line-0 "
+                    "alignment.",
+                ))
+
+    # Pre-start suffix alignment: when folio_start_line > 0 and no continuation
+    # words were carried forward, align the concatenated pre-start OCR against
+    # the preceding folio's last chant to find which suffix of that chant falls
+    # on this page.  Produces _suffix_words (words to distribute to pre-start
+    # lines) and _suffix_ptr (position within _suffix_words).
+    _suffix_words: list[str] = []
+    _suffix_ptr: int = 0
+    if (
+        folio_start_line > 0
+        and not flat_text.has_continuation
+        and flat_text.suffix_probe_words
+        and pre_start_suffix_align
+    ):
+        pre_start_ocr = " ".join(
+            (ocr_texts.get(lbl) or "").strip()
+            for lbl in sorted_labels[:folio_start_line]
+            if (ocr_texts.get(lbl) or "").strip()
+        )
+        if pre_start_ocr:
+            from Bio.Align import PairwiseAligner as _SGA
+            _sg = _SGA()
+            _sg.mode = "global"
+            _sg.match_score = match_score
+            _sg.mismatch_score = mismatch_score
+            _sg.open_gap_score = open_penalty
+            _sg.extend_gap_score = extend_penalty
+            _sg.open_left_insertion_score = 0.0
+            _sg.extend_left_insertion_score = 0.0
+            _best_k, _best_norm = 0, float("-inf")
+            for _k in range(len(flat_text.suffix_probe_words)):
+                _cand = " ".join(flat_text.suffix_probe_words[_k:])
+                if not _cand:
+                    continue
+                _raw = _sg.score(pre_start_ocr, _cand)
+                _den = sqrt(len(pre_start_ocr) * len(_cand))
+                _nm = _raw / _den if _den > 0 else float("-inf")
+                if _nm > _best_norm:
+                    _best_norm, _best_k = _nm, _k
+            if _best_norm >= pre_start_suffix_min_score:
+                _suffix_words = flat_text.suffix_probe_words[_best_k:]
+                flags.append(ValidationFlag(
+                    "suffix_alignment_detected",
+                    f"Pre-start lines aligned to preceding folio's last chant "
+                    f"starting at word {_best_k} (score={_best_norm:.3f}); "
+                    f"{len(_suffix_words)} word(s) available for "
+                    f"{folio_start_line} pre-start line(s).",
+                ))
+            else:
+                flags.append(ValidationFlag(
+                    "suffix_alignment_skipped",
+                    f"Pre-start suffix alignment score {_best_norm:.3f} below "
+                    f"threshold {pre_start_suffix_min_score}; pre-start lines "
+                    "assigned empty.",
+                ))
+
     for label_idx, label in enumerate(sorted_labels):
         # Hard-reset at column boundary (two-column folios only).
         if (
@@ -585,6 +822,156 @@ def allocate_lines(
                     f"Expected column_break_777 anchor near word "
                     f"{text_pointer} but none found",
                 ))
+
+        # Pre-start region [0, folio_start_line): lines that belong to the
+        # previous folio's bleeding continuation, not this folio's chants.
+        if folio_start_line > 0 and label_idx < folio_start_line:
+            _pre_ptr_start = text_pointer
+            ocr = (ocr_texts.get(label) or "").strip()
+            _pre_best_norm: float | None = None
+
+            if flat_text.has_continuation:
+                # Continuation words are prepended in flat_text.words[0:start].
+                _pre_limit = first_folio_span.start_word
+                _pre_cands = flat_text.words[text_pointer:_pre_limit]
+
+                if not _pre_cands:
+                    consumed = 0
+                elif not ocr:
+                    # Distribute remaining continuation words uniformly.
+                    _rem_lines = folio_start_line - label_idx
+                    _rem_words = _pre_limit - text_pointer
+                    consumed = max(
+                        1, _rem_words // max(_rem_lines, 1)
+                    )
+                else:
+                    _pbest_norm = float("-inf")
+                    _pbest_k = 1
+                    for _pk in range(1, len(_pre_cands) + 1):
+                        _pwin = " ".join(_pre_cands[:_pk])
+                        _praw = aligner.score(ocr, _pwin)
+                        _pden = sqrt(len(ocr) * len(_pwin))
+                        _pnm = (
+                            _praw / _pden if _pden > 0 else float("-inf")
+                        )
+                        if _pnm > _pbest_norm:
+                            _pbest_norm = _pnm
+                            _pbest_k = _pk
+                    consumed = _pbest_k
+                    _pre_best_norm = _pbest_norm
+
+                # Force-snap: last pre-start line consumes all remaining
+                # continuation words (mirrors the col_break_word force-close).
+                if label_idx == folio_start_line - 1:
+                    consumed = _pre_limit - text_pointer
+
+                consumed = max(consumed, 0)
+                manifest[label] = " ".join(
+                    flat_text.words[text_pointer:text_pointer + consumed]
+                )
+                _is_forced = label_idx == folio_start_line - 1
+                if debug and debug_lines_out is not None:
+                    debug_lines_out.append({
+                        "label": label,
+                        "ocr": ocr,
+                        "pointer_start": _pre_ptr_start,
+                        "pointer_end": text_pointer + consumed,
+                        "consumed": consumed,
+                        "assigned": manifest[label],
+                        "best_k_pre_snap": consumed,
+                        "best_norm": _pre_best_norm,
+                        "anchor_word": None,
+                        "anchor_type": None,
+                        "snapped": False,
+                        "forced": _is_forced,
+                        "alignment": "(pre-start continuation)",
+                    })
+                text_pointer += consumed
+
+            elif _suffix_words:
+                # Suffix alignment: distribute words from the preceding folio's
+                # last chant across this pre-start line.  Uses _suffix_ptr to
+                # track position within _suffix_words independently of
+                # text_pointer (which stays at 0 until the hard-reset at L*).
+                _suf_cands = _suffix_words[_suffix_ptr:]
+                _suf_consumed: int
+                _is_forced = label_idx == folio_start_line - 1
+
+                if not _suf_cands:
+                    _suf_consumed = 0
+                elif not ocr:
+                    _rem_lines = folio_start_line - label_idx
+                    _rem_suf = len(_suf_cands)
+                    _suf_consumed = max(1, _rem_suf // max(_rem_lines, 1))
+                else:
+                    _pbest_norm = float("-inf")
+                    _pbest_k = 1
+                    for _pk in range(1, len(_suf_cands) + 1):
+                        _pwin = " ".join(_suf_cands[:_pk])
+                        _praw = aligner.score(ocr, _pwin)
+                        _pden = sqrt(len(ocr) * len(_pwin))
+                        _pnm = (
+                            _praw / _pden if _pden > 0 else float("-inf")
+                        )
+                        if _pnm > _pbest_norm:
+                            _pbest_norm = _pnm
+                            _pbest_k = _pk
+                    _suf_consumed = _pbest_k
+                    _pre_best_norm = _pbest_norm
+
+                if _is_forced:
+                    _suf_consumed = len(_suf_cands)
+
+                _suf_consumed = max(_suf_consumed, 0)
+                manifest[label] = " ".join(
+                    _suffix_words[_suffix_ptr:_suffix_ptr + _suf_consumed]
+                )
+                if debug and debug_lines_out is not None:
+                    debug_lines_out.append({
+                        "label": label,
+                        "ocr": ocr,
+                        "pointer_start": _suffix_ptr,
+                        "pointer_end": _suffix_ptr + _suf_consumed,
+                        "consumed": _suf_consumed,
+                        "assigned": manifest[label],
+                        "best_k_pre_snap": _suf_consumed,
+                        "best_norm": _pre_best_norm,
+                        "anchor_word": None,
+                        "anchor_type": None,
+                        "snapped": False,
+                        "forced": _is_forced,
+                        "alignment": "(pre-start suffix alignment)",
+                    })
+                _suffix_ptr += _suf_consumed
+                # text_pointer is intentionally not advanced here; it remains
+                # at flat_text.initial_pointer until the hard-reset at L*.
+
+            else:
+                # No CSV data for this pre-start line.
+                manifest[label] = ""
+                if debug and debug_lines_out is not None:
+                    debug_lines_out.append({
+                        "label": label,
+                        "ocr": ocr,
+                        "pointer_start": _pre_ptr_start,
+                        "pointer_end": _pre_ptr_start,
+                        "consumed": 0,
+                        "assigned": "",
+                        "best_k_pre_snap": 0,
+                        "best_norm": None,
+                        "anchor_word": None,
+                        "anchor_type": None,
+                        "snapped": False,
+                        "forced": False,
+                        "alignment": "(pre-start continuation)",
+                    })
+
+            continue
+
+        # Hard-reset when entering the folio region (zero-distance after
+        # force-snap consumed all continuation words on last pre-start line).
+        if folio_start_line > 0 and label_idx == folio_start_line:
+            text_pointer = first_folio_span.start_word
 
         col1 = col_break_word is not None and label_idx < left_column_count
         word_limit = col_break_word if col1 else text_pointer + search_window

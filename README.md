@@ -63,7 +63,13 @@ python page_viewer.py image.jpg annotation.xml # pre-load both on startup
    correcting BLLA over-segmentation on chant manuscripts with neume notation
 5. **NW chant allocator** — align Cantus CSV text to detected lines via Needleman-Wunsch,
    using volpiano break markers as alignment anchors; supports folio-to-folio continuation
-   via CSV backward-lookup and optional JSON sidecar (`--folio-state-out`)
+   via CSV backward-lookup and optional JSON sidecar (`--folio-state-out`); in no-volpiano
+   mode, automatically locates where this folio's first chant begins on the page by
+   NW-matching the chant's opening text against each OCR line, then assigns the preceding
+   lines to the previous folio's bleeding continuation — if the preceding folio also lacks
+   volpiano, aligns the pre-start OCR against the preceding folio's last chant text to find
+   and assign the correct CSV suffix (see `locate_folio_start` and `pre_start_suffix_align`
+   in [`steps/README.md`](steps/README.md))
 6. **GT word segmentation** — distribute Cantus words across each line's pixel extent
 7. **Syllable segmentation** — subdivide each word node into character-proportional
    syllable regions using Latin syllabification from `volpiano-display-utilities`

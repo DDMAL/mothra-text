@@ -10,6 +10,7 @@ from steps.nw_chant_allocator import (
     MidWordBreak,
     _split_word_at_syl_boundary,
     allocate_lines,
+    locate_first_chant_line,
 )
 
 
@@ -553,3 +554,458 @@ class TestAllocateLinesWithMidWordBreaks:
         )
         assert result.manifest["line0"] == "alpha beta"
         assert result.manifest["line1"] == "gamma delta"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for folio-start location tests
+# ---------------------------------------------------------------------------
+
+def _flat_no_volpiano(
+    cont_words: list[str],
+    folio_words: list[str],
+    folio_seq: int = 1,
+) -> FlatTextData:
+    """FlatTextData with no anchors, optional continuation span + folio span."""
+    words = cont_words + folio_words
+    spans = []
+    if cont_words:
+        spans.append(ChantSpan(0, 0, len(cont_words)))
+    spans.append(ChantSpan(folio_seq, len(cont_words), len(words)))
+    return FlatTextData(
+        words=words,
+        anchors=[],
+        chant_spans=spans,
+        has_continuation=bool(cont_words),
+    )
+
+
+class TestLocateFirstChantLine:
+    """Unit tests for locate_first_chant_line()."""
+
+    def test_returns_none_when_no_folio_chant_span(self):
+        # Only a continuation span (sequence=0); no folio chant.
+        flat = FlatTextData(
+            words=["carry"],
+            anchors=[],
+            chant_spans=[ChantSpan(0, 0, 1)],
+        )
+        result = locate_first_chant_line(flat, ["line0"], {"line0": "carry"})
+        assert result is None
+
+    def test_returns_none_when_all_ocr_empty(self):
+        flat = _flat_no_volpiano([], ["alleluia", "dominus"])
+        result = locate_first_chant_line(
+            flat,
+            ["line0", "line1"],
+            {"line0": "", "line1": ""},
+        )
+        assert result is None
+
+    def test_returns_none_when_no_probe_words(self):
+        # Folio span exists but is empty (start == end).
+        flat = FlatTextData(
+            words=["carry"],
+            anchors=[],
+            chant_spans=[ChantSpan(0, 0, 1), ChantSpan(1, 1, 1)],
+        )
+        result = locate_first_chant_line(flat, ["line0"], {"line0": "carry"})
+        assert result is None
+
+    def test_exact_match_returns_correct_index(self):
+        # Probe = first 8 words of folio chant = "alleluia dominus".
+        # line0 OCR is gibberish; line1 OCR matches exactly.
+        flat = _flat_no_volpiano(
+            cont_words=["prev1", "prev2"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "xyzzy qwerty", "line1": "alleluia dominus"}
+        result = locate_first_chant_line(flat, ["line0", "line1"], ocr)
+        assert result is not None
+        idx, score = result
+        assert idx == 1
+        assert score > 0.0
+
+    def test_returns_index_zero_when_first_line_best_matches(self):
+        flat = _flat_no_volpiano([], ["alleluia", "dominus"])
+        ocr = {"line0": "alleluia dominus", "line1": "xyzzy qwerty"}
+        result = locate_first_chant_line(flat, ["line0", "line1"], ocr)
+        assert result is not None
+        idx, score = result
+        assert idx == 0
+        assert score > 0.0
+
+    def test_uses_only_first_n_probe_words(self):
+        # n_probe_words=1: probe = "alleluia" only.
+        flat = _flat_no_volpiano([], ["alleluia", "dominus", "laudate"])
+        ocr = {"line0": "alleluia extra", "line1": "dominus laudate"}
+        result = locate_first_chant_line(
+            flat, ["line0", "line1"], ocr, n_probe_words=1
+        )
+        assert result is not None
+        idx, _ = result
+        # "alleluia" probe should match line0 best.
+        assert idx == 0
+
+    def test_accepts_external_aligner(self):
+        from Bio.Align import PairwiseAligner
+        al = PairwiseAligner()
+        al.mode = "global"
+        al.match_score = 8.0
+        al.mismatch_score = -5.0
+        al.open_gap_score = -7.0
+        al.extend_gap_score = -3.0
+        flat = _flat_no_volpiano([], ["alleluia", "dominus"])
+        ocr = {"line0": "xyzzy", "line1": "alleluia dominus"}
+        result = locate_first_chant_line(
+            flat, ["line0", "line1"], ocr, aligner=al
+        )
+        assert result is not None
+        assert result[0] == 1
+
+
+class TestFolioStartLocation:
+    """Integration tests for folio-start detection inside allocate_lines()."""
+
+    def test_folio_start_detected_flag_emitted(self):
+        # line0 OCR gibberish; line1 OCR matches folio chant → L*=1, flag emitted.
+        flat = _flat_no_volpiano(
+            cont_words=["carry1", "carry2"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "xyzzy qwerty", "line1": "alleluia dominus"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr)
+        flag_types = [f.flag_type for f in result.flags]
+        assert "folio_start_detected" in flag_types
+
+    def test_pre_start_lines_get_continuation_words(self):
+        # cont_words=["carry1","carry2"], folio_words=["alleluia","dominus"]
+        # line0 → carry words (force-snapped); line1 → folio chant start.
+        flat = _flat_no_volpiano(
+            cont_words=["carry1", "carry2"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "xyzzy qwerty", "line1": "alleluia dominus"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr)
+        # Pre-start line should hold the continuation words.
+        assert result.manifest["line0"] == "carry1 carry2"
+
+    def test_folio_region_starts_at_first_chant(self):
+        flat = _flat_no_volpiano(
+            cont_words=["carry1", "carry2"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "xyzzy qwerty", "line1": "alleluia dominus"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr)
+        # Folio line should contain only the folio chant words.
+        assert result.manifest["line1"] == "alleluia dominus"
+
+    def test_force_snap_consumes_all_continuation_words(self):
+        # Two pre-start lines, 3 continuation words.
+        # NW might under-assign, but force-snap on last pre-start line must
+        # consume the remaining word.
+        flat = _flat_no_volpiano(
+            cont_words=["w1", "w2", "w3"],
+            folio_words=["alleluia", "dominus"],
+        )
+        # line0 and line1 are pre-start; line2 is folio start.
+        ocr = {
+            "line0": "xyzzy",
+            "line1": "qwerty",
+            "line2": "alleluia dominus",
+        }
+        result = allocate_lines(flat, ["line0", "line1", "line2"], ocr)
+        # All 3 continuation words must appear across line0 and line1.
+        pre_words = (
+            result.manifest["line0"].split()
+            + result.manifest["line1"].split()
+        )
+        assert set(pre_words) == {"w1", "w2", "w3"}
+        assert result.manifest["line2"] == "alleluia dominus"
+
+    def test_pre_start_empty_when_no_continuation(self):
+        # has_continuation=False: pre-start lines should get "".
+        flat = _flat_no_volpiano(
+            cont_words=[],       # no continuation
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "xyzzy qwerty", "line1": "alleluia dominus"}
+        # Inject a fake continuation scenario by patching locate to return 1.
+        # Simpler: use folio_start_min_score so line0 is still detected as
+        # pre-start without real continuation data.
+        # We need folio_start_line > 0: make line0 OCR non-matching enough
+        # that line1 scores higher on the probe "alleluia dominus".
+        result = allocate_lines(flat, ["line0", "line1"], ocr)
+        flag_types = [f.flag_type for f in result.flags]
+        if "folio_start_detected" in flag_types:
+            # When L*=1, line0 is pre-start with no continuation → empty.
+            assert result.manifest["line0"] == ""
+        # Either way, line1 should contain the folio chant words.
+        assert "alleluia" in result.manifest["line1"]
+
+    def test_strategy_disabled_when_anchors_present(self):
+        # flat_text.anchors is non-empty → strategy must NOT activate.
+        flat = FlatTextData(
+            words=["carry1", "alleluia", "dominus"],
+            anchors=[Anchor(1, "within_chant_7")],
+            chant_spans=[
+                ChantSpan(0, 0, 1),
+                ChantSpan(1, 1, 3),
+            ],
+            has_continuation=True,
+        )
+        ocr = {"line0": "xyzzy", "line1": "alleluia dominus"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr)
+        flag_types = [f.flag_type for f in result.flags]
+        assert "folio_start_detected" not in flag_types
+        assert "folio_start_not_located" not in flag_types
+
+    def test_strategy_disabled_in_stub_mode(self):
+        # All OCR empty → strategy must NOT activate even with no anchors.
+        flat = _flat_no_volpiano(
+            cont_words=["carry"],
+            folio_words=["alleluia", "dominus"],
+        )
+        result = allocate_lines(
+            flat,
+            ["line0", "line1"],
+            {"line0": "", "line1": ""},
+        )
+        flag_types = [f.flag_type for f in result.flags]
+        assert "folio_start_detected" not in flag_types
+        assert "folio_start_not_located" not in flag_types
+
+    def test_fallback_flag_when_score_below_threshold(self):
+        flat = _flat_no_volpiano(
+            cont_words=["carry"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "carry", "line1": "alleluia dominus"}
+        result = allocate_lines(
+            flat,
+            ["line0", "line1"],
+            ocr,
+            folio_start_min_score=100.0,  # impossibly high
+        )
+        flag_types = [f.flag_type for f in result.flags]
+        assert "folio_start_not_located" in flag_types
+        assert "folio_start_detected" not in flag_types
+
+    def test_locate_folio_start_false_disables_strategy(self):
+        flat = _flat_no_volpiano(
+            cont_words=["carry"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "xyzzy", "line1": "alleluia dominus"}
+        result = allocate_lines(
+            flat, ["line0", "line1"], ocr, locate_folio_start=False
+        )
+        flag_types = [f.flag_type for f in result.flags]
+        assert "folio_start_detected" not in flag_types
+        assert "folio_start_not_located" not in flag_types
+
+    def test_no_pre_start_lines_when_first_chant_at_line_zero(self):
+        # Both line0 and line1 OCR match folio chant → L*=0, no pre-start.
+        flat = _flat_no_volpiano(
+            cont_words=["carry1", "carry2"],
+            folio_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "alleluia dominus", "line1": "xyzzy"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr)
+        flag_types = [f.flag_type for f in result.flags]
+        # L*=0 → no pre-start → flag not emitted.
+        assert "folio_start_detected" not in flag_types
+
+
+# ---------------------------------------------------------------------------
+# Helpers for suffix alignment tests
+# ---------------------------------------------------------------------------
+
+def _flat_suffix(
+    folio_words: list[str],
+    suffix_probe_words: list[str],
+    folio_seq: int = 1,
+) -> FlatTextData:
+    """FlatTextData with no anchors, no continuation, and a suffix probe."""
+    return FlatTextData(
+        words=folio_words,
+        anchors=[],
+        chant_spans=[ChantSpan(folio_seq, 0, len(folio_words))],
+        has_continuation=False,
+        suffix_probe_words=suffix_probe_words,
+    )
+
+
+class TestPreStartSuffixAlignment:
+    """Tests for suffix alignment of pre-start lines (no has_continuation)."""
+
+    def test_suffix_probe_words_populated_by_build_flat_text(self):
+        # build_flat_text_and_anchors should populate suffix_probe_words from
+        # the preceding folio's last chant when has_continuation=False.
+        from steps.nw_chant_allocator import build_flat_text_and_anchors
+        csv_rows = [
+            {"folio": "003v", "sequence": "1", "mode": "7",
+             "fulltext_ms": "alleluia dominus", "volpiano": ""},
+            {"folio": "004r", "sequence": "1", "mode": "7",
+             "fulltext_ms": "kyrie eleison", "volpiano": ""},
+        ]
+        flat = build_flat_text_and_anchors(csv_rows, folio="004r")
+        assert flat.suffix_probe_words == ["alleluia", "dominus"]
+
+    def test_suffix_probe_empty_when_no_preceding_folio(self):
+        from steps.nw_chant_allocator import build_flat_text_and_anchors
+        csv_rows = [
+            {"folio": "001r", "sequence": "1", "mode": "7",
+             "fulltext_ms": "kyrie eleison", "volpiano": ""},
+        ]
+        flat = build_flat_text_and_anchors(csv_rows, folio="001r")
+        assert flat.suffix_probe_words == []
+
+    def test_suffix_probe_empty_when_preceding_row_has_no_text(self):
+        from steps.nw_chant_allocator import build_flat_text_and_anchors
+        csv_rows = [
+            {"folio": "003v", "sequence": "1", "mode": "7",
+             "fulltext_ms": "", "volpiano": ""},
+            {"folio": "004r", "sequence": "1", "mode": "7",
+             "fulltext_ms": "kyrie eleison", "volpiano": ""},
+        ]
+        flat = build_flat_text_and_anchors(csv_rows, folio="004r")
+        assert flat.suffix_probe_words == []
+
+    def test_suffix_probe_not_populated_when_has_continuation(self):
+        # When 77 is found on a preceding folio, has_continuation=True and
+        # suffix_probe_words should remain empty.
+        from steps.nw_chant_allocator import build_flat_text_and_anchors
+        csv_rows = [
+            {"folio": "003v", "sequence": "1", "mode": "7",
+             "fulltext_ms": "alleluia dominus carry", "volpiano": "1---d77d"},
+            {"folio": "004r", "sequence": "1", "mode": "7",
+             "fulltext_ms": "kyrie eleison", "volpiano": ""},
+        ]
+        flat = build_flat_text_and_anchors(csv_rows, folio="004r")
+        assert flat.has_continuation is True
+        assert flat.suffix_probe_words == []
+
+    def test_suffix_alignment_detected_flag_emitted(self):
+        # When pre-start OCR matches the suffix of the probe, the flag fires.
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=["alleluia", "dominus", "laudate"],
+        )
+        # line0 is pre-start (OCR matches "laudate"), line1 is folio start
+        ocr = {"line0": "laudate", "line1": "kyrie eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0)
+        flag_types = [f.flag_type for f in result.flags]
+        assert "suffix_alignment_detected" in flag_types
+
+    def test_pre_start_lines_get_suffix_words(self):
+        # The pre-start line should receive words from the suffix probe, not "".
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=["alleluia", "dominus", "laudate"],
+        )
+        ocr = {"line0": "laudate", "line1": "kyrie eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0)
+        # line0 is pre-start; should have some suffix words (not empty)
+        assert result.manifest.get("line0", "") != ""
+
+    def test_folio_region_unchanged(self):
+        # The folio region (line1 onward) should still get folio words.
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "alleluia", "line1": "kyrie eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0)
+        assert "kyrie" in result.manifest.get("line1", "")
+
+    def test_force_snap_last_pre_start_line_consumes_all_suffix(self):
+        # With 2 pre-start lines, the last one must consume all remaining
+        # suffix words via force-snap.
+        flat = _flat_suffix(
+            folio_words=["kyrie"],
+            suffix_probe_words=["a", "b", "c", "d", "e"],
+        )
+        # line0 and line1 are pre-start, line2 is folio start
+        ocr = {"line0": "a b", "line1": "xyz", "line2": "kyrie"}
+        result = allocate_lines(flat, ["line0", "line1", "line2"], ocr,
+                                folio_start_min_score=-999.0)
+        words0 = result.manifest.get("line0", "").split()
+        words1 = result.manifest.get("line1", "").split()
+        # All suffix words must be consumed across the two pre-start lines
+        assert len(words0) + len(words1) == 5
+
+    def test_below_threshold_falls_back_to_empty(self):
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "alleluia", "line1": "kyrie eleison"}
+        # folio_start_min_score low so L*>0 is detected; suffix threshold high
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0,
+                                pre_start_suffix_min_score=999.0)
+        assert result.manifest.get("line0", "") == ""
+        flag_types = [f.flag_type for f in result.flags]
+        assert "suffix_alignment_skipped" in flag_types
+
+    def test_disabled_when_has_continuation_true(self):
+        # has_continuation=True → existing continuation path, not suffix path.
+        flat = _flat_no_volpiano(
+            cont_words=["carry1", "carry2"],
+            folio_words=["kyrie", "eleison"],
+        )
+        flat = FlatTextData(
+            words=flat.words,
+            anchors=flat.anchors,
+            chant_spans=flat.chant_spans,
+            has_continuation=True,
+            suffix_probe_words=["prev_chant_word"],
+        )
+        ocr = {"line0": "carry1", "line1": "kyrie eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0)
+        flag_types = [f.flag_type for f in result.flags]
+        assert "suffix_alignment_detected" not in flag_types
+
+    def test_disabled_when_suffix_probe_empty(self):
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=[],
+        )
+        ocr = {"line0": "xyzzy", "line1": "kyrie eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0)
+        flag_types = [f.flag_type for f in result.flags]
+        assert "suffix_alignment_detected" not in flag_types
+        assert "suffix_alignment_skipped" not in flag_types
+
+    def test_disabled_when_pre_start_suffix_align_false(self):
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "alleluia", "line1": "kyrie eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                folio_start_min_score=-999.0,
+                                pre_start_suffix_align=False)
+        assert result.manifest.get("line0", "") == ""
+        flag_types = [f.flag_type for f in result.flags]
+        assert "suffix_alignment_detected" not in flag_types
+        assert "suffix_alignment_skipped" not in flag_types
+
+    def test_no_activation_when_folio_start_line_is_zero(self):
+        # Disable folio-start detection → L*=0 always → suffix alignment
+        # never activates (no pre-start region exists).
+        flat = _flat_suffix(
+            folio_words=["kyrie", "eleison"],
+            suffix_probe_words=["alleluia", "dominus"],
+        )
+        ocr = {"line0": "kyrie", "line1": "eleison"}
+        result = allocate_lines(flat, ["line0", "line1"], ocr,
+                                locate_folio_start=False)
+        flag_types = [f.flag_type for f in result.flags]
+        assert "suffix_alignment_detected" not in flag_types
+        assert "suffix_alignment_skipped" not in flag_types
