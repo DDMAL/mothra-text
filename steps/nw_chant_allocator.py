@@ -468,6 +468,8 @@ class AllocationResult:
     flags: list[ValidationFlag]
     text_pointer_end: int       # flat_text index after last consumed word
     debug_lines: list[dict] | None = None  # set when debug=True
+    folio_start_line: int = 0  # L* index (0 when no pre-start region)
+    constituent_overrides: dict[str, str] = field(default_factory=dict)
 
 
 def _chant_starts_in_range(
@@ -583,6 +585,10 @@ def allocate_lines(
     folio_start_min_score: float = 0.0,
     pre_start_suffix_align: bool = True,
     pre_start_suffix_min_score: float = 0.0,
+    fused_lines: list | None = None,
+    node_ocr: dict | None = None,
+    mixed_line_n_words: int = 3,
+    mixed_line_min_score: float = 0.0,
 ) -> AllocationResult:
     """Align OCR text for each line against flat_text using NW alignment.
 
@@ -653,6 +659,21 @@ def allocate_lines(
                             suffix_alignment_skipped flag is emitted
                             and pre-start lines fall back to ""
                             (default 0.0).
+        fused_lines:        Optional list of FusedLine objects
+                            (from fuse_colinear_segments).  Required
+                            for mixed-line detection.  When None,
+                            mixed-line detection is skipped entirely.
+        node_ocr:           Per-segment OCR dict {label: text}, as
+                            built before fusion.  Required alongside
+                            fused_lines for mixed-line detection.
+        mixed_line_n_words: Maximum number of folio chant words to
+                            detect on fused_{L*-1}'s right constituents
+                            (default 3).  Capped at 3 because beyond
+                            that the NW main loop would already be
+                            correct.
+        mixed_line_min_score: NW quality gate for mixed-line detection.
+                            Detection is skipped when the best score
+                            falls below this threshold (default 0.0).
 
     Returns:
         AllocationResult with manifest, validation flags, and
@@ -803,6 +824,11 @@ def allocate_lines(
                     "assigned empty.",
                 ))
 
+    # Mixed-line state: updated inside the pre-start loop for the last
+    # pre-start line; used at the folio-region hard-reset.
+    constituent_overrides: dict[str, str] = {}
+    _mixed_word_skip: int = 0
+
     for label_idx, label in enumerate(sorted_labels):
         # Hard-reset at column boundary (two-column folios only).
         if (
@@ -829,6 +855,130 @@ def allocate_lines(
             _pre_ptr_start = text_pointer
             ocr = (ocr_texts.get(label) or "").strip()
             _pre_best_norm: float | None = None
+
+            # Mixed-line detection: on the last pre-start line, check if
+            # fused_{L*-1}'s rightmost constituents contain opening words
+            # of this folio's first chant.  Runs before force-snap so
+            # _suffix_ptr reflects exactly what this line will receive.
+            if (
+                label_idx == folio_start_line - 1
+                and fused_lines is not None
+                and node_ocr is not None
+                and not flat_text.anchors
+                and first_folio_span is not None
+            ):
+                _fused_prev = next(
+                    (f for f in fused_lines if f.label == label), None
+                )
+                if (
+                    _fused_prev is not None
+                    and len(_fused_prev.constituent_labels) > 1
+                ):
+                    if _suffix_words:
+                        _ml_suf = list(_suffix_words[_suffix_ptr:])
+                    elif flat_text.has_continuation:
+                        _ml_suf = flat_text.words[
+                            text_pointer:first_folio_span.start_word
+                        ]
+                    else:
+                        _ml_suf = []
+                    _prev_lbls = _fused_prev.constituent_labels
+                    _prev_ws = _fused_prev.constituent_widths
+                    _fstart = first_folio_span.start_word
+                    _n_try = min(
+                        mixed_line_n_words, len(_prev_lbls) - 1
+                    )
+                    _best_ml: float = float("-inf")
+                    _best_ml_k: int | None = None
+                    _best_ml_n: int = 0
+                    for _mk in range(
+                        len(_prev_lbls) - _n_try, len(_prev_lbls)
+                    ):
+                        _right_ocr = " ".join(
+                            (node_ocr.get(lbl) or "").strip()
+                            for lbl in _prev_lbls[_mk:]
+                            if (node_ocr.get(lbl) or "").strip()
+                        )
+                        if not _right_ocr:
+                            continue
+                        for _mn in range(1, mixed_line_n_words + 1):
+                            _fw = flat_text.words[
+                                _fstart: _fstart + _mn
+                            ]
+                            if not _fw:
+                                break
+                            _mc = " ".join(_fw)
+                            _mr = aligner.score(_right_ocr, _mc)
+                            _md = sqrt(
+                                len(_right_ocr) * len(_mc)
+                            )
+                            _ms = (
+                                _mr / _md if _md > 0
+                                else float("-inf")
+                            )
+                            if _ms > _best_ml:
+                                _best_ml = _ms
+                                _best_ml_k = _mk
+                                _best_ml_n = _mn
+                    if (
+                        _best_ml >= mixed_line_min_score
+                        and _best_ml_k is not None
+                        and _ml_suf
+                    ):
+                        _llbls = _prev_lbls[:_best_ml_k]
+                        _rlbls = _prev_lbls[_best_ml_k:]
+                        _lws = _prev_ws[:_best_ml_k]
+                        _rws = _prev_ws[_best_ml_k:]
+                        # Left: suffix words across left constituents
+                        _ltw = sum(_lws) or 1
+                        _li2 = 0
+                        for _li, (_ll, _lw) in enumerate(
+                            zip(_llbls, _lws)
+                        ):
+                            if _li == len(_llbls) - 1:
+                                constituent_overrides[_ll] = (
+                                    " ".join(_ml_suf[_li2:])
+                                )
+                            else:
+                                _lc = max(
+                                    0,
+                                    round(len(_ml_suf) * _lw / _ltw),
+                                )
+                                constituent_overrides[_ll] = (
+                                    " ".join(_ml_suf[_li2:_li2 + _lc])
+                                )
+                                _li2 += _lc
+                        # Right: first N folio words across right
+                        _rfws = flat_text.words[
+                            _fstart: _fstart + _best_ml_n
+                        ]
+                        _rtw = sum(_rws) or 1
+                        _ri2 = 0
+                        for _ri, (_rl, _rw) in enumerate(
+                            zip(_rlbls, _rws)
+                        ):
+                            if _ri == len(_rlbls) - 1:
+                                constituent_overrides[_rl] = (
+                                    " ".join(_rfws[_ri2:])
+                                )
+                            else:
+                                _rc = max(
+                                    0,
+                                    round(len(_rfws) * _rw / _rtw),
+                                )
+                                constituent_overrides[_rl] = (
+                                    " ".join(_rfws[_ri2:_ri2 + _rc])
+                                )
+                                _ri2 += _rc
+                        _mixed_word_skip = _best_ml_n
+                        flags.append(ValidationFlag(
+                            "mixed_start_detected",
+                            f"{_best_ml_n} folio word(s) detected on "
+                            f"pre-start line {label} at constituent "
+                            f"index {_best_ml_k} "
+                            f"(score={_best_ml:.3f}); "
+                            "moved to that line.",
+                        ))
 
             if flat_text.has_continuation:
                 # Continuation words are prepended in flat_text.words[0:start].
@@ -971,7 +1121,7 @@ def allocate_lines(
         # Hard-reset when entering the folio region (zero-distance after
         # force-snap consumed all continuation words on last pre-start line).
         if folio_start_line > 0 and label_idx == folio_start_line:
-            text_pointer = first_folio_span.start_word
+            text_pointer = first_folio_span.start_word + _mixed_word_skip
 
         col1 = col_break_word is not None and label_idx < left_column_count
         word_limit = col_break_word if col1 else text_pointer + search_window
@@ -1179,6 +1329,8 @@ def allocate_lines(
         flags=flags,
         text_pointer_end=text_pointer,
         debug_lines=debug_lines_out,
+        folio_start_line=folio_start_line,
+        constituent_overrides=constituent_overrides,
     )
 
 

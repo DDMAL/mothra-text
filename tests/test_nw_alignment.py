@@ -1009,3 +1009,279 @@ class TestPreStartSuffixAlignment:
         flag_types = [f.flag_type for f in result.flags]
         assert "suffix_alignment_detected" not in flag_types
         assert "suffix_alignment_skipped" not in flag_types
+
+
+# ---------------------------------------------------------------------------
+# Helpers for mixed-line detection tests
+# ---------------------------------------------------------------------------
+
+def _make_fused(label, constituent_labels, constituent_widths, column=1):
+    from steps.column_clustering import FusedLine
+    return FusedLine(
+        label=label,
+        constituent_labels=constituent_labels,
+        constituent_widths=constituent_widths,
+        xmin=0, xmax=sum(constituent_widths), ymin=0, ymax=30,
+        column=column,
+    )
+
+
+def _mixed_flat(cont_words, folio_words):
+    return _flat_no_volpiano(
+        cont_words=cont_words,
+        folio_words=folio_words,
+    )
+
+
+def _mixed_fused_2(seg_widths_0=(100, 100), seg_widths_1=(200,)):
+    return [
+        _make_fused("line0", ["seg0a", "seg0b"], list(seg_widths_0)),
+        _make_fused("line1", ["seg1a"], list(seg_widths_1)),
+    ]
+
+
+class TestMixedLineDetection:
+    """Tests for mixed-line detection: folio words on pre-start line."""
+
+    # ------------------------------------------------------------------
+    # Basic activation
+    # ------------------------------------------------------------------
+
+    def test_flag_emitted_when_mixed_line_detected(self):
+        # L*=1; right constituent of line0 OCR matches first folio word.
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia", "seg1a": "dominus",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        flag_types = [f.flag_type for f in result.flags]
+        assert "mixed_start_detected" in flag_types
+
+    def test_folio_word_moved_to_right_constituent(self):
+        # Right constituent of line0 should receive the first folio word.
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia", "seg1a": "dominus",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides.get("seg0b") == "alleluia"
+
+    def test_left_constituent_gets_continuation_word(self):
+        # Left constituent should receive the continuation word.
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia", "seg1a": "dominus",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides.get("seg0a") == "carry"
+
+    def test_folio_start_line_in_result(self):
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia", "seg1a": "dominus",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.folio_start_line == 1
+
+    # ------------------------------------------------------------------
+    # Pointer adjustment: moved words must not appear again on L*
+    # ------------------------------------------------------------------
+
+    def test_folio_region_does_not_repeat_moved_word(self):
+        # "alleluia" moved to seg0b; L* (line1) must start at "dominus".
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia", "seg1a": "dominus",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.manifest["line1"] == "dominus"
+        assert "alleluia" not in result.manifest["line1"]
+
+    # ------------------------------------------------------------------
+    # Multi-word detection (up to mixed_line_n_words)
+    # ------------------------------------------------------------------
+
+    def test_two_folio_words_detected(self):
+        # L*=1 (line0 OCR is noise, line1 OCR matches probe).
+        # Right two constituents of line0 OCR as first 2 folio words.
+        flat = _mixed_flat(["carry"], ["alpha", "beta", "gamma"])
+        fused = [
+            _make_fused("line0", ["seg0a", "seg0b", "seg0c"],
+                        [100, 100, 100]),
+            _make_fused("line1", ["seg1a"], [200]),
+        ]
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alpha", "seg0c": "beta",
+            "seg1a": "alpha beta gamma",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "xyzzy qwerty", "line1": "alpha beta gamma"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides.get("seg0b") == "alpha"
+        assert result.constituent_overrides.get("seg0c") == "beta"
+        assert result.manifest["line1"] == "gamma"
+
+    # ------------------------------------------------------------------
+    # Noise constituent absorbed into right portion
+    # ------------------------------------------------------------------
+
+    def test_noise_constituent_absorbed_into_right_portion(self):
+        # seg0c OCR "v" is noise; seg0b "reocupe" ~ "Preoccupemus".
+        # Best split includes both seg0b + seg0c in the right portion;
+        # proportional distribution gives seg0b the word, seg0c gets "".
+        flat = _mixed_flat(["carry"], ["Preoccupemus", "faciem"])
+        fused = [
+            _make_fused("line0", ["seg0a", "seg0b", "seg0c"],
+                        [100, 200, 60]),
+            _make_fused("line1", ["seg1a"], [300]),
+        ]
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "reocupe",
+            "seg0c": "v", "seg1a": "faciem",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry reocupe v", "line1": "faciem"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides.get("seg0b") == "Preoccupemus"
+        assert result.constituent_overrides.get("seg0c") == ""
+        assert result.manifest["line1"] == "faciem"
+
+    # ------------------------------------------------------------------
+    # No-activation cases
+    # ------------------------------------------------------------------
+
+    def test_no_activation_when_folio_start_line_is_zero(self):
+        # locate_folio_start=False forces L*=0 — detection must not run.
+        flat = _mixed_flat([], ["alpha", "beta"])
+        fused = [_make_fused("line0", ["seg0a", "seg0b"], [100, 100])]
+        node_ocr = {"seg0a": "alpha", "seg0b": "beta"}
+        result = allocate_lines(
+            flat, ["line0"], {"line0": "alpha beta"},
+            fused_lines=fused, node_ocr=node_ocr,
+            locate_folio_start=False,
+        )
+        assert result.constituent_overrides == {}
+        flag_types = [f.flag_type for f in result.flags]
+        assert "mixed_start_detected" not in flag_types
+
+    def test_no_activation_when_fused_lines_is_none(self):
+        # fused_lines not supplied — constituent_overrides stays empty.
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+        )
+        assert result.constituent_overrides == {}
+
+    def test_no_activation_when_anchors_present(self):
+        # Volpiano anchors present — no-volpiano guard fires, skipped.
+        words = ["alpha", "beta", "gamma", "delta"]
+        anchors = [Anchor(2, "within_chant_7"), Anchor(4, "within_chant_7")]
+        flat = FlatTextData(
+            words=words, anchors=anchors,
+            chant_spans=[ChantSpan(1, 0, 4)],
+        )
+        fused = [
+            _make_fused("line0", ["seg0a", "seg0b"], [100, 100]),
+            _make_fused("line1", ["seg1a", "seg1b"], [100, 100]),
+        ]
+        node_ocr = {
+            "seg0a": "alpha", "seg0b": "beta",
+            "seg1a": "gamma", "seg1b": "delta",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "alpha beta", "line1": "gamma delta"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides == {}
+
+    def test_no_activation_when_single_constituent_line(self):
+        # Only one constituent on L*-1 — nothing to split.
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = [
+            _make_fused("line0", ["seg0a"], [200]),
+            _make_fused("line1", ["seg1a"], [200]),
+        ]
+        node_ocr = {"seg0a": "carry alleluia", "seg1a": "dominus"}
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides == {}
+
+    def test_below_threshold_falls_back_cleanly(self):
+        # Score 9.0 exceeds the theoretical max (~8.0) — no detection.
+        flat = _mixed_flat(["carry"], ["alleluia", "dominus"])
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia", "seg1a": "dominus",
+        }
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+            mixed_line_min_score=9.0,
+        )
+        assert result.constituent_overrides == {}
+        flag_types = [f.flag_type for f in result.flags]
+        assert "mixed_start_detected" not in flag_types
+
+    def test_no_activation_when_no_pre_start_content(self):
+        # No suffix_probe_words → suffix alignment block never runs
+        # → _suffix_words stays [] → _ml_suf = [] → detection blocked.
+        # Models the A-Gu 29_013r regression: OCR on the last pre-start
+        # line matches the first folio word, but there is no left-side
+        # pre-start text to justify the fix, so NW must start at word 0.
+        flat = FlatTextData(
+            words=["alleluia", "dominus"],
+            anchors=[],
+            chant_spans=[ChantSpan(1, 0, 2)],
+            has_continuation=False,
+        )
+        fused = _mixed_fused_2()
+        node_ocr = {
+            "seg0a": "carry", "seg0b": "alleluia",
+            "seg1a": "alleluia dominus",
+        }
+        # line0 OCR is poor vs probe; line1 OCR matches exactly → L*=1.
+        result = allocate_lines(
+            flat, ["line0", "line1"],
+            {"line0": "carry alleluia", "line1": "alleluia dominus"},
+            fused_lines=fused, node_ocr=node_ocr,
+        )
+        assert result.constituent_overrides == {}
+        flag_types = [f.flag_type for f in result.flags]
+        assert "mixed_start_detected" not in flag_types
+        # NW starts at word 0 — no cascade shift.
+        assert result.manifest["line1"] == "alleluia dominus"

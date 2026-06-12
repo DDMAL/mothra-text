@@ -166,6 +166,19 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
     words of the first folio chant are used as the probe string.
   - Works at line granularity; if the first chant begins mid-line, L\* points to
     that mixed line (known approximation).
+- **Mixed-line detection** (`fused_lines`, `node_ocr`, `mixed_line_n_words=3`,
+  `mixed_line_min_score=0.0`): when `folio_start_line > 0` and no volpiano anchors
+  are present, checks whether the rightmost constituents of fused line L\*−1 contain
+  opening words of this folio's first chant. A grid search over (split index k,
+  word count n ≤ `mixed_line_n_words`) scores per-constituent OCR against the first
+  N folio words using NW; the best-scoring (k, n) pair is selected when its
+  normalised score meets `mixed_line_min_score`. On success, `constituent_overrides`
+  in `AllocationResult` maps each constituent of L\*−1 to its final text (left
+  portion → pre-start text, right portion → first N folio words), and the hard-reset
+  pointer at L\* is offset by N to avoid repeating those words. Emits
+  `mixed_start_detected` (flag detail includes word count, constituent index, and
+  score). Requires `fused_lines` and `node_ocr` to be supplied; silently skips
+  otherwise.
 - **Pre-start suffix alignment** (`pre_start_suffix_align=True`, default): when
   `has_continuation=False` and `folio_start_line > 0` (pre-start lines were found),
   assigns CSV ground-truth text to those pre-start lines by aligning their
@@ -240,7 +253,7 @@ conda activate line-seg-eval
 pytest tests/ -v
 ```
 
-202 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
+245 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
 `test_nw_alignment.py`, `test_nw_folio_state.py`, and others.
 
 ---

@@ -299,6 +299,8 @@ def run(
         snap_window=2,
         force_window=10,  # force within_chant_7 up to ±10 words mid-chant
         debug=debug_ocr,
+        fused_lines=fused_lines,
+        node_ocr=node_ocr,
     )
 
     # --- DEBUG OCR: print per-line NW alignment detail ---
@@ -338,6 +340,8 @@ def run(
     # ------------------------------------------------------
 
     manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
+    for lbl, text in alloc_result.constituent_overrides.items():
+        manifest[lbl] = text
     for flag in alloc_result.flags:
         logger.warning(
             "Validation flag [%s]: %s", flag.flag_type, flag.detail
