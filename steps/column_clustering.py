@@ -47,20 +47,33 @@ def cluster_columns(
     line_nodes: list,
     page_width: int,
     variance_threshold: float = 0.5,
+    min_gutter_fraction: float = 0.12,
 ) -> tuple:
     """Return line node labels in reading order and the detected column count.
 
     Args:
-        line_nodes:         Line-level nodes from page.children after
-                            KrakenSegmentation.  Each node must expose
-                            ``bbox.xmin``, ``bbox.xmax``, ``bbox.ymin``,
-                            and ``label``.
-        page_width:         Image width in pixels (``page.image.shape[1]``).
-                            Reserved for future full-width line detection.
-        variance_threshold: Minimum fraction of xmin variance that the
-                            two-cluster split must explain over the single-
-                            cluster baseline for the page to be treated as
-                            two-column.  Default 0.5.
+        line_nodes:           Line-level nodes from page.children after
+                              KrakenSegmentation.  Each node must expose
+                              ``bbox.xmin``, ``bbox.xmax``, ``bbox.ymin``,
+                              and ``label``.
+        page_width:           Image width in pixels (``page.image.shape[1]``).
+                              Reserved for future full-width line detection.
+        variance_threshold:   Minimum fraction of xmin variance that the
+                              two-cluster split must explain over the single-
+                              cluster baseline for the page to be treated as
+                              two-column.  Default 0.5.
+        min_gutter_fraction:  Minimum required distance from the median
+                              right-edge of well-contained left-cluster nodes
+                              to the leftmost right-cluster node, expressed as
+                              a fraction of ``page_width``.  In genuine
+                              2-column layout this distance covers the right
+                              margin of the left column plus the inter-column
+                              gutter, typically > 10 % of page width.  For
+                              BLLA line-splitting artifacts (where BLLA splits
+                              each physical line at a consistent horizontal
+                              gap) the left-half segments end close to the
+                              split point, giving a small distance < 12 %.
+                              Default 0.12 (12 % of page width).
 
     Returns:
         ``(sorted_labels, column_count, split_x)`` where ``sorted_labels``
@@ -118,11 +131,13 @@ def cluster_columns(
 
             disjoint = False
             approximately_disjoint = False
+            gutter_ok = False
             if left_cands and right_cands:
-                disjoint = (
-                    max(nd.bbox.xmax for nd in left_cands)
-                    < min(nd.bbox.xmin for nd in right_cands)
-                )
+                max_left_xmax = max(nd.bbox.xmax for nd in left_cands)
+                min_right_xmin = min(nd.bbox.xmin for nd in right_cands)
+
+                disjoint = max_left_xmax < min_right_xmin
+
                 # At least 75% of left lines must end before the median
                 # right-cluster xmin. Uses median (not minimum) to tolerate
                 # one right-column line that starts unusually far left.
@@ -135,28 +150,58 @@ def cluster_columns(
                 ) / len(left_cands)
                 approximately_disjoint = frac_contained >= 0.75
 
+                if disjoint:
+                    # Clusters are strictly non-overlapping: use the raw gap
+                    # between the rightmost left edge and the leftmost right
+                    # edge.  A small positive gap (≥ 2 % page width) is
+                    # enough — this path only fires when no left-cluster node
+                    # reaches into the right cluster at all, so an actual
+                    # inter-column space is confirmed.
+                    actual_gutter = min_right_xmin - max_left_xmax
+                    gutter_ok = actual_gutter >= page_width * 0.02
+                else:
+                    # Clusters overlap (e.g. spanning notation nodes or
+                    # full-width lines exist).  Use the typical gap —
+                    # distance from the median right-edge of well-contained
+                    # left-cluster nodes to min_right_xmin — which is large
+                    # for genuine 2-column layout and small for BLLA
+                    # line-splitting artefacts.
+                    contained_xmax = [
+                        nd.bbox.xmax for nd in left_cands
+                        if nd.bbox.xmax < min_right_xmin
+                    ]
+                    if contained_xmax:
+                        median_cxmax = float(np.median(contained_xmax))
+                        typical_gap = min_right_xmin - median_cxmax
+                        typical_gap_ok = (
+                            typical_gap >= page_width * min_gutter_fraction
+                        )
+                        # Left-cluster text ending very close to the
+                        # right-cluster boundary (≥ 90 % of min_right_xmin)
+                        # indicates genuine 2-column text that fills the
+                        # column, not a BLLA half-line that ends before the
+                        # split point.  BLLA half-lines typically end at
+                        # ≈ 75–85 % of the split boundary.
+                        close_boundary = (
+                            median_cxmax / min_right_xmin >= 0.90
+                        )
+                        gutter_ok = typical_gap_ok or close_boundary
+                    else:
+                        gutter_ok = False
+
             if (
                 (
-                    variance_reduction >= variance_threshold
-                    and approximately_disjoint
+                    (
+                        variance_reduction >= variance_threshold
+                        and approximately_disjoint
+                    )
+                    or disjoint
                 )
-                or disjoint
-            ) and centroid_distance >= min_separation:
+                and gutter_ok
+                and centroid_distance >= min_separation
+            ):
                 two_column = True
                 split_x = candidate_split_x
-
-                if (
-                    variance_reduction >= variance_threshold
-                    and variance_reduction < variance_threshold * 1.5
-                    and not disjoint
-                ):
-                    logger.warning(
-                        "Column detection uncertain for this page "
-                        "(variance_reduction=%.2f, threshold=%.2f); "
-                        "review result manually",
-                        variance_reduction,
-                        variance_threshold,
-                    )
 
     if two_column:
         left_nodes = [nd for nd in line_nodes if nd.bbox.xmin < split_x]
@@ -229,7 +274,8 @@ def fuse_colinear_segments(
             nd_height = nd.bbox.ymax - nd.bbox.ymin
             group_height = group_ymax - group_ymin
             overlap_h = max(
-                0, min(group_ymax, nd.bbox.ymax) - max(group_ymin, nd.bbox.ymin)
+                0,
+                min(group_ymax, nd.bbox.ymax) - max(group_ymin, nd.bbox.ymin),
             )
             min_height = min(nd_height, group_height) or 1
             overlap_frac = overlap_h / min_height

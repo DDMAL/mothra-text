@@ -1,10 +1,8 @@
 """Tests for steps.column_clustering."""
 
-import logging
 from unittest.mock import MagicMock
 
 from steps.column_clustering import (
-    FusedLine,
     cluster_columns,
     fuse_colinear_segments,
 )
@@ -64,16 +62,17 @@ class TestClusterColumns:
         # Left column top-to-bottom, then right column top-to-bottom
         assert labels == ["l0", "l1", "r1", "r0"]
 
-    def test_tight_clusters_detected_regardless_of_gap_size(self):
-        # Columns with only 200px separation on a 1000px page —
-        # gap-threshold approach would miss this; variance ratio catches it.
+    def test_tight_clusters_detected_with_sufficient_typical_gap(self):
+        # Tight xmin clusters (spread ≤ 4 px each) with a typical gap of
+        # 138 px = 13.8 % of page_width=1000, above the 12 % threshold.
+        # median(contained left xmax)=160, min_right_xmin=298 → gap=138.
         nodes = [
-            _make_line("l0", xmin=48,  xmax=220, ymin=10),
-            _make_line("l1", xmin=50,  xmax=222, ymin=100),
-            _make_line("l2", xmin=52,  xmax=224, ymin=200),
-            _make_line("r0", xmin=250, xmax=480, ymin=10),
-            _make_line("r1", xmin=252, xmax=482, ymin=100),
-            _make_line("r2", xmin=248, xmax=478, ymin=200),
+            _make_line("l0", xmin=48, xmax=150, ymin=10),
+            _make_line("l1", xmin=50, xmax=165, ymin=100),
+            _make_line("l2", xmin=52, xmax=160, ymin=200),
+            _make_line("r0", xmin=300, xmax=480, ymin=10),
+            _make_line("r1", xmin=302, xmax=482, ymin=100),
+            _make_line("r2", xmin=298, xmax=478, ymin=200),
         ]
         labels, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 2
@@ -84,9 +83,10 @@ class TestClusterColumns:
         # Clusters are disjoint (left xmax < right xmin) but the variance
         # reduction is low because we only have 2 nodes.  The disjointness
         # check alone should declare two columns.
+        # median(contained left xmax)=100, min_right_xmin=350 → gap=250=25%.
         nodes = [
-            _make_line("l0", xmin=50, xmax=200, ymin=10),
-            _make_line("r0", xmin=300, xmax=500, ymin=10),
+            _make_line("l0", xmin=50, xmax=100, ymin=10),
+            _make_line("r0", xmin=350, xmax=500, ymin=10),
         ]
         _, count, _ = cluster_columns(
             nodes, page_width=1000, variance_threshold=0.99
@@ -112,25 +112,56 @@ class TestClusterColumns:
         _, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 1
 
-    def test_uncertain_detection_logs_warning(self, caplog):
-        # Two clusters with centroids 300px apart (> 5% of 1000px) and
-        # variance_reduction ≈ 0.69 — above threshold=0.5 but below
-        # 1.5×0.5=0.75, so the uncertain warning fires.  Not strictly
-        # disjoint because left xmax (380) > right xmin (300), but
-        # approximately disjoint: both left lines have xmax < median of
-        # right xmin (400).
+    def test_overlapping_x_clusters_treated_as_single_column(self):
+        # Left xmax (380) > right xmin (300): clusters physically overlap in x.
+        # gutter = 300 - 380 = -80 < 0 → gutter_ok=False → single column.
         nodes = [
             _make_line("l0", xmin=0,   xmax=350, ymin=10),
             _make_line("l1", xmin=200, xmax=380, ymin=100),
             _make_line("r0", xmin=300, xmax=500, ymin=10),
             _make_line("r1", xmin=500, xmax=700, ymin=100),
         ]
-        with caplog.at_level(logging.WARNING, logger="steps.column_clustering"):
-            _, count, _ = cluster_columns(
-                nodes, page_width=1000, variance_threshold=0.5
-            )
-        assert count == 2
-        assert any("uncertain" in r.message for r in caplog.records)
+        _, count, _ = cluster_columns(
+            nodes, page_width=1000, variance_threshold=0.5
+        )
+        assert count == 1
+
+    def test_near_touching_clusters_treated_as_single_column(self):
+        # Left xmax=500 == right xmin=500: gap=0px < 2% threshold
+        # → single-column.
+        nodes = [
+            _make_line("l0", xmin=100, xmax=500, ymin=10),
+            _make_line("l1", xmin=110, xmax=510, ymin=100),
+            _make_line("r0", xmin=500, xmax=900, ymin=10),
+            _make_line("r1", xmin=510, xmax=910, ymin=100),
+        ]
+        labels, count, split_x = cluster_columns(nodes, page_width=1000)
+        assert count == 1
+        assert split_x is None
+
+    def test_gutter_threshold_controls_detection(self):
+        # l3 (xmax=510) spans past r0 (xmin=500), forcing the non-disjoint
+        # (typical_gap) path where min_gutter_fraction controls the threshold.
+        # contained left xmax values: [430, 432, 435] → median=432
+        # typical_gap = 500 − 432 = 68px = 6.8% of page_width=1000.
+        # ratio = 432/500 = 0.864 < 0.90, so the close-boundary path is off.
+        # 6.8% < default 12% → single column.
+        # With min_gutter_fraction=0.05 (5%) → 6.8% >= 5% → two columns.
+        nodes = [
+            _make_line("l0", xmin=50, xmax=430, ymin=10),
+            _make_line("l1", xmin=55, xmax=435, ymin=100),
+            _make_line("l2", xmin=52, xmax=432, ymin=200),
+            _make_line("l3", xmin=58, xmax=510, ymin=300),
+            _make_line("r0", xmin=500, xmax=900, ymin=10),
+            _make_line("r1", xmin=502, xmax=902, ymin=100),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 1  # 6.8% < default 12%
+
+        _, count, _ = cluster_columns(
+            nodes, page_width=1000, min_gutter_fraction=0.05
+        )
+        assert count == 2  # 6.8% >= 5%
 
     def test_custom_variance_threshold_prevents_split(self):
         # Same data as above: variance_reduction ≈ 0.69. A stricter threshold
@@ -194,7 +225,7 @@ class TestFuseColinearSegments:
     def test_reading_order_within_group(self):
         # right-side seg (seg_right) has smaller ymin than left-side seg —
         # after fusion constituents must be sorted by xmin, not ymin.
-        seg_left  = _make_line("seg_l", xmin=50,  xmax=300, ymin=105, ymax=205)
+        seg_left = _make_line("seg_l", xmin=50, xmax=300, ymin=105, ymax=205)
         seg_right = _make_line("seg_r", xmin=350, xmax=600, ymin=100, ymax=200)
         result = fuse_colinear_segments([seg_left, seg_right], split_x=None)
         assert len(result) == 1

@@ -19,13 +19,37 @@ KrakenSegmentation  →  cluster_columns
 
 ## `column_clustering.py`
 
-### `cluster_columns(line_nodes, page_width, variance_threshold=0.5)`
+### `cluster_columns(line_nodes, page_width, variance_threshold=0.5, min_gutter_fraction=0.02)`
 
 Auto-detects 1 vs 2 columns from line left-edge x-coordinates using two independent
 signals (bimodal xmin variance ratio and disjoint horizontal extents). Returns
 `(sorted_labels, column_count, split_x)` where `sorted_labels` is the list of node
 labels in reading order (left column top-to-bottom, then right), `column_count` is
 1 or 2, and `split_x` is the column-split x-coordinate (`None` for single-column pages).
+
+`min_gutter_fraction` (default 0.12) controls the gutter-width gate, but its meaning
+depends on whether the two candidate clusters are strictly disjoint:
+
+- **Disjoint clusters** (`max_left_xmax < min_right_xmin`): no left-cluster node
+  reaches into the right cluster, so the clusters are geometrically non-overlapping.
+  The raw gap (`min_right_xmin − max_left_xmax`) is checked against a fixed 2 % of
+  page width.  `min_gutter_fraction` is not used in this path.
+- **Overlapping clusters** (spanning notation nodes or full-width lines cause
+  `max_left_xmax ≥ min_right_xmin`): uses the "typical gap" — the distance from the
+  median right-edge of well-contained left-cluster nodes to the leftmost right-cluster
+  node.  `gutter_ok` is True when EITHER the typical gap meets
+  `min_gutter_fraction × page_width` (default 12 %) OR the median right-edge of
+  well-contained left-cluster nodes is ≥ 90 % of `min_right_xmin` (indicating genuine
+  column text that fills the column, not a BLLA half-line that ends well short of the
+  split boundary).  In genuine 2-column layout the typical gap typically exceeds 12 % of
+  page width (neume segments occupy only the left portion of the column).  For BLLA
+  line-splitting artefacts the typical gap is smaller (≈ 10 % or less) and the left
+  halves end at ≈ 75–85 % of the split boundary, below the 90 % close-boundary
+  threshold.  Manuscripts with narrow inter-column gutters and no spanning notation nodes
+  may be detected via the close-boundary path instead.
+
+Lower `min_gutter_fraction` (or use `--column-variance-threshold 1.1` to force
+single-column) for manuscripts with very narrow inter-column gutters.
 
 ### `FusedLine` dataclass
 
