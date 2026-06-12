@@ -19,37 +19,40 @@ KrakenSegmentation  →  cluster_columns
 
 ## `column_clustering.py`
 
-### `cluster_columns(line_nodes, page_width, variance_threshold=0.5, min_gutter_fraction=0.02)`
+### `cluster_columns(line_nodes, page_width, bimodal_threshold=0.5, min_gutter_fraction=0.02, min_peak_count=2)`
 
-Auto-detects 1 vs 2 columns from line left-edge x-coordinates using two independent
-signals (bimodal xmin variance ratio and disjoint horizontal extents). Returns
-`(sorted_labels, column_count, split_x)` where `sorted_labels` is the list of node
-labels in reading order (left column top-to-bottom, then right), `column_count` is
-1 or 2, and `split_x` is the column-split x-coordinate (`None` for single-column pages).
+Auto-detects 1 vs 2 columns using a **horizontal coverage-profile bimodal test**.
+For each pixel column `x`, `coverage[x]` counts the number of line bounding boxes
+that include that position.  A genuine 2-column page has two peaks in the coverage
+profile (one per column) separated by a valley (the inter-column gutter); a 1-column
+page has a single continuous plateau.
 
-`min_gutter_fraction` (default 0.12) controls the gutter-width gate, but its meaning
-depends on whether the two candidate clusters are strictly disjoint:
+Returns `(sorted_labels, column_count, split_x)` where `sorted_labels` is the list
+of node labels in reading order (left column top-to-bottom, then right),
+`column_count` is 1 or 2, and `split_x` is the column-split x-coordinate (`None`
+for single-column pages).
 
-- **Disjoint clusters** (`max_left_xmax < min_right_xmin`): no left-cluster node
-  reaches into the right cluster, so the clusters are geometrically non-overlapping.
-  The raw gap (`min_right_xmin − max_left_xmax`) is checked against a fixed 2 % of
-  page width.  `min_gutter_fraction` is not used in this path.
-- **Overlapping clusters** (spanning notation nodes or full-width lines cause
-  `max_left_xmax ≥ min_right_xmin`): uses the "typical gap" — the distance from the
-  median right-edge of well-contained left-cluster nodes to the leftmost right-cluster
-  node.  `gutter_ok` is True when EITHER the typical gap meets
-  `min_gutter_fraction × page_width` (default 12 %) OR the median right-edge of
-  well-contained left-cluster nodes is ≥ 90 % of `min_right_xmin` (indicating genuine
-  column text that fills the column, not a BLLA half-line that ends well short of the
-  split boundary).  In genuine 2-column layout the typical gap typically exceeds 12 % of
-  page width (neume segments occupy only the left portion of the column).  For BLLA
-  line-splitting artefacts the typical gap is smaller (≈ 10 % or less) and the left
-  halves end at ≈ 75–85 % of the split boundary, below the 90 % close-boundary
-  threshold.  Manuscripts with narrow inter-column gutters and no spanning notation nodes
-  may be detected via the close-boundary path instead.
+**Algorithm:**
+1. Build the coverage array and smooth with a 5-px window.
+2. Scope the search to the inner 20–80 % of the **text region**
+   (`min(xmin) → max(xmax)`) to exclude blank page margins that would otherwise
+   produce spurious zero-coverage gaps.
+3. Find the deepest valley in the search band.
+4. Compute `left_peak` and `right_peak` on each side of the valley.
+5. Declare two columns when:
+   - `valley < bimodal_threshold × min(left_peak, right_peak)` (default 0.5 — valley
+     must be less than half the smaller peak),
+   - both peaks reach `min_peak_count` (default 2 lines), and
+   - the gutter width ≥ `min_gutter_fraction × page_width` (default 2 %).
 
-Lower `min_gutter_fraction` (or use `--column-variance-threshold 1.1` to force
-single-column) for manuscripts with very narrow inter-column gutters.
+BLLA spanning-bbox artefacts (one bbox drawn across both columns at the same
+y-position) only slightly elevate the valley and do not eliminate the bimodal
+structure provided they are a minority of the total lines.  The text-region scoping
+means blank page margins never produce false two-column splits.
+
+Use `--column-bimodal-threshold` to tune sensitivity; raise it to accept a shallower
+valley (more aggressive 2-column detection), lower it to require a deeper valley
+(stricter).
 
 ### `FusedLine` dataclass
 

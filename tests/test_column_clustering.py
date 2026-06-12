@@ -25,6 +25,8 @@ def _make_line(
 
 
 class TestClusterColumns:
+    # ---- edge cases ----
+
     def test_empty(self):
         labels, count, split_x = cluster_columns([], page_width=1000)
         assert labels == []
@@ -38,158 +40,171 @@ class TestClusterColumns:
         assert count == 1
         assert split_x is None
 
+    # ---- 1-column cases ----
+
     def test_single_column_sorted_by_y(self):
         nodes = [
-            _make_line("line_2", xmin=50, xmax=400, ymin=200),
-            _make_line("line_0", xmin=52, xmax=402, ymin=10),
-            _make_line("line_1", xmin=51, xmax=401, ymin=100),
+            _make_line("line_2", xmin=50, xmax=800, ymin=200),
+            _make_line("line_0", xmin=52, xmax=802, ymin=10),
+            _make_line("line_1", xmin=51, xmax=801, ymin=100),
         ]
         labels, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 1
         assert labels == ["line_0", "line_1", "line_2"]
 
-    def test_two_columns_reading_order(self):
-        # Left column: xmin ≈ 50, right column: xmin ≈ 600
+    def test_continuous_coverage_single_column(self):
+        # All lines span the full text width — coverage is a flat plateau
+        # in the text region, no bimodal valley.
         nodes = [
-            _make_line("r1", xmin=600, xmax=900, ymin=10),
+            _make_line("l0", xmin=50, xmax=900, ymin=10),
+            _make_line("l1", xmin=50, xmax=900, ymin=100),
+            _make_line("l2", xmin=50, xmax=900, ymin=200),
+            _make_line("l3", xmin=50, xmax=900, ymin=300),
+        ]
+        labels, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 1
+        assert labels == ["l0", "l1", "l2", "l3"]
+
+    def test_gutter_in_margin_not_detected(self):
+        # All lines occupy one contiguous region (200–700 px).  The zeros
+        # in coverage outside that region are page margins, not a gutter,
+        # and the text-region search excludes them.
+        nodes = [
+            _make_line("l0", xmin=200, xmax=700, ymin=10),
+            _make_line("l1", xmin=200, xmax=700, ymin=100),
+            _make_line("l2", xmin=200, xmax=700, ymin=200),
+            _make_line("l3", xmin=200, xmax=700, ymin=300),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 1
+
+    # ---- 2-column cases ----
+
+    def test_two_columns_detected(self):
+        # Left col: 50–400, right col: 600–950, gutter: 200 px (20 %).
+        nodes = [
             _make_line("l0", xmin=50,  xmax=400, ymin=10),
-            _make_line("l1", xmin=52,  xmax=402, ymin=100),
-            _make_line("r0", xmin=602, xmax=902, ymin=100),
+            _make_line("l1", xmin=50,  xmax=400, ymin=100),
+            _make_line("l2", xmin=50,  xmax=400, ymin=200),
+            _make_line("r0", xmin=600, xmax=950, ymin=10),
+            _make_line("r1", xmin=600, xmax=950, ymin=100),
+            _make_line("r2", xmin=600, xmax=950, ymin=200),
         ]
         labels, count, split_x = cluster_columns(nodes, page_width=1000)
         assert count == 2
         assert split_x is not None
-        # Left column top-to-bottom, then right column top-to-bottom
-        assert labels == ["l0", "l1", "r1", "r0"]
-
-    def test_tight_clusters_detected_with_sufficient_typical_gap(self):
-        # Tight xmin clusters (spread ≤ 4 px each) with a typical gap of
-        # 138 px = 13.8 % of page_width=1000, above the 12 % threshold.
-        # median(contained left xmax)=160, min_right_xmin=298 → gap=138.
-        nodes = [
-            _make_line("l0", xmin=48, xmax=150, ymin=10),
-            _make_line("l1", xmin=50, xmax=165, ymin=100),
-            _make_line("l2", xmin=52, xmax=160, ymin=200),
-            _make_line("r0", xmin=300, xmax=480, ymin=10),
-            _make_line("r1", xmin=302, xmax=482, ymin=100),
-            _make_line("r2", xmin=298, xmax=478, ymin=200),
-        ]
-        labels, count, _ = cluster_columns(nodes, page_width=1000)
-        assert count == 2
+        assert 400 < split_x < 600
         assert labels[:3] == ["l0", "l1", "l2"]
         assert labels[3:] == ["r0", "r1", "r2"]
 
-    def test_disjoint_extents_sufficient_without_variance(self):
-        # Clusters are disjoint (left xmax < right xmin) but the variance
-        # reduction is low because we only have 2 nodes.  The disjointness
-        # check alone should declare two columns.
-        # median(contained left xmax)=100, min_right_xmin=350 → gap=250=25%.
+    def test_two_columns_reading_order(self):
+        # Lines in each column are deliberately out of sequence in the
+        # input; reading order must be left-column top-to-bottom then
+        # right-column top-to-bottom.
         nodes = [
-            _make_line("l0", xmin=50, xmax=100, ymin=10),
-            _make_line("r0", xmin=350, xmax=500, ymin=10),
-        ]
-        _, count, _ = cluster_columns(
-            nodes, page_width=1000, variance_threshold=0.99
-        )
-        assert count == 2
-
-    def test_non_disjoint_single_column(self):
-        # Lines span much of the page width — not disjoint, not bimodal.
-        nodes = [
-            _make_line("l0", xmin=50, xmax=900, ymin=10),
-            _make_line("l1", xmin=55, xmax=905, ymin=100),
-            _make_line("l2", xmin=48, xmax=898, ymin=200),
+            _make_line("r1", xmin=600, xmax=950, ymin=10),
+            _make_line("l0", xmin=50,  xmax=400, ymin=10),
+            _make_line("l1", xmin=50,  xmax=400, ymin=200),
+            _make_line("r0", xmin=600, xmax=950, ymin=200),
         ]
         labels, count, _ = cluster_columns(nodes, page_width=1000)
-        assert count == 1
-        assert labels == ["l0", "l1", "l2"]
+        assert count == 2
+        assert labels == ["l0", "l1", "r1", "r0"]
 
-    def test_identical_xmins_single_column(self):
-        nodes = [
-            _make_line("a", xmin=100, xmax=800, ymin=10),
-            _make_line("b", xmin=100, xmax=800, ymin=100),
-        ]
-        _, count, _ = cluster_columns(nodes, page_width=1000)
-        assert count == 1
-
-    def test_overlapping_x_clusters_treated_as_single_column(self):
-        # Left xmax (380) > right xmin (300): clusters physically overlap in x.
-        # gutter = 300 - 380 = -80 < 0 → gutter_ok=False → single column.
-        nodes = [
-            _make_line("l0", xmin=0,   xmax=350, ymin=10),
-            _make_line("l1", xmin=200, xmax=380, ymin=100),
-            _make_line("r0", xmin=300, xmax=500, ymin=10),
-            _make_line("r1", xmin=500, xmax=700, ymin=100),
-        ]
-        _, count, _ = cluster_columns(
-            nodes, page_width=1000, variance_threshold=0.5
-        )
-        assert count == 1
-
-    def test_near_touching_clusters_treated_as_single_column(self):
-        # Left xmax=500 == right xmin=500: gap=0px < 2% threshold
-        # → single-column.
-        nodes = [
-            _make_line("l0", xmin=100, xmax=500, ymin=10),
-            _make_line("l1", xmin=110, xmax=510, ymin=100),
-            _make_line("r0", xmin=500, xmax=900, ymin=10),
-            _make_line("r1", xmin=510, xmax=910, ymin=100),
-        ]
-        labels, count, split_x = cluster_columns(nodes, page_width=1000)
-        assert count == 1
-        assert split_x is None
-
-    def test_gutter_threshold_controls_detection(self):
-        # l3 (xmax=510) spans past r0 (xmin=500), forcing the non-disjoint
-        # (typical_gap) path where min_gutter_fraction controls the threshold.
-        # contained left xmax values: [430, 432, 435] → median=432
-        # typical_gap = 500 − 432 = 68px = 6.8% of page_width=1000.
-        # ratio = 432/500 = 0.864 < 0.90, so the close-boundary path is off.
-        # 6.8% < default 12% → single column.
-        # With min_gutter_fraction=0.05 (5%) → 6.8% >= 5% → two columns.
-        nodes = [
-            _make_line("l0", xmin=50, xmax=430, ymin=10),
-            _make_line("l1", xmin=55, xmax=435, ymin=100),
-            _make_line("l2", xmin=52, xmax=432, ymin=200),
-            _make_line("l3", xmin=58, xmax=510, ymin=300),
-            _make_line("r0", xmin=500, xmax=900, ymin=10),
-            _make_line("r1", xmin=502, xmax=902, ymin=100),
-        ]
-        _, count, _ = cluster_columns(nodes, page_width=1000)
-        assert count == 1  # 6.8% < default 12%
-
-        _, count, _ = cluster_columns(
-            nodes, page_width=1000, min_gutter_fraction=0.05
-        )
-        assert count == 2  # 6.8% >= 5%
-
-    def test_custom_variance_threshold_prevents_split(self):
-        # Same data as above: variance_reduction ≈ 0.69. A stricter threshold
-        # of 0.8 is not met and the clusters are not strictly disjoint, so
-        # count=1.
-        nodes = [
-            _make_line("l0", xmin=0,   xmax=350, ymin=10),
-            _make_line("l1", xmin=200, xmax=380, ymin=100),
-            _make_line("r0", xmin=300, xmax=500, ymin=10),
-            _make_line("r1", xmin=500, xmax=700, ymin=100),
-        ]
-        _, count, _ = cluster_columns(
-            nodes, page_width=1000, variance_threshold=0.8
-        )
-        assert count == 1
-
-    def test_within_column_y_sort_preserved(self):
-        # Right column lines deliberately given out-of-order ymin values.
+    def test_spanning_bbox_minority_still_two_columns(self):
+        # 6 column-contained lines + 2 BLLA spanning artefacts.
+        # Valley coverage = 2, column peaks = 5 → ratio 0.40 < threshold 0.50.
         nodes = [
             _make_line("l0", xmin=50,  xmax=400, ymin=10),
-            _make_line("r2", xmin=600, xmax=900, ymin=300),
-            _make_line("l1", xmin=52,  xmax=402, ymin=200),
-            _make_line("r0", xmin=602, xmax=902, ymin=10),
-            _make_line("r1", xmin=601, xmax=901, ymin=150),
+            _make_line("l1", xmin=50,  xmax=400, ymin=100),
+            _make_line("l2", xmin=50,  xmax=400, ymin=200),
+            _make_line("r0", xmin=600, xmax=950, ymin=10),
+            _make_line("r1", xmin=600, xmax=950, ymin=100),
+            _make_line("r2", xmin=600, xmax=950, ymin=200),
+            _make_line("sp0", xmin=50, xmax=950, ymin=50),
+            _make_line("sp1", xmin=50, xmax=950, ymin=150),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 2
+
+    def test_within_column_y_sort_preserved(self):
+        nodes = [
+            _make_line("l0", xmin=50,  xmax=400, ymin=10),
+            _make_line("r2", xmin=600, xmax=950, ymin=300),
+            _make_line("l1", xmin=50,  xmax=400, ymin=200),
+            _make_line("r0", xmin=600, xmax=950, ymin=10),
+            _make_line("r1", xmin=600, xmax=950, ymin=150),
         ]
         labels, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 2
         assert labels == ["l0", "l1", "r0", "r1", "r2"]
+
+    # ---- parameter control ----
+
+    def test_sparse_page_below_min_peak_count_not_split(self):
+        # Only 1 line per column side — each peak is 1 < min_peak_count=2.
+        nodes = [
+            _make_line("l0", xmin=50,  xmax=400, ymin=10),
+            _make_line("r0", xmin=600, xmax=950, ymin=10),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 1
+
+    def test_sparse_page_meets_min_peak_count_split(self):
+        # 2 lines per side — each peak equals min_peak_count=2.
+        nodes = [
+            _make_line("l0", xmin=50,  xmax=400, ymin=10),
+            _make_line("l1", xmin=50,  xmax=400, ymin=100),
+            _make_line("r0", xmin=600, xmax=950, ymin=10),
+            _make_line("r1", xmin=600, xmax=950, ymin=100),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 2
+
+    def test_custom_bimodal_threshold_prevents_split(self):
+        # 6 column lines + 3 spanning → valley=3, peaks=6, ratio=0.50.
+        # Default threshold 0.50: 3 < 3 is False → 1 column.
+        # Raised threshold 0.60: 3 < 3.6 is True  → 2 columns.
+        nodes = [
+            _make_line("l0", xmin=50,  xmax=400, ymin=10),
+            _make_line("l1", xmin=50,  xmax=400, ymin=100),
+            _make_line("l2", xmin=50,  xmax=400, ymin=200),
+            _make_line("r0", xmin=600, xmax=950, ymin=10),
+            _make_line("r1", xmin=600, xmax=950, ymin=100),
+            _make_line("r2", xmin=600, xmax=950, ymin=200),
+            _make_line("sp0", xmin=50, xmax=950, ymin=50),
+            _make_line("sp1", xmin=50, xmax=950, ymin=150),
+            _make_line("sp2", xmin=50, xmax=950, ymin=250),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 1  # valley/peak = 3/6 = 0.50, not < 0.50
+
+        _, count, _ = cluster_columns(
+            nodes, page_width=1000, bimodal_threshold=0.60
+        )
+        assert count == 2  # 3/6 = 0.50 < 0.60
+
+    def test_custom_min_gutter_fraction_controls_split(self):
+        # Gutter: 40 px (x 480–520) = 4 % of page_width=1000.
+        # Default min_gutter_fraction=0.02 (20 px) → passes.
+        # Raised  min_gutter_fraction=0.08 (80 px) → fails.
+        nodes = [
+            _make_line("l0", xmin=50,  xmax=480, ymin=10),
+            _make_line("l1", xmin=50,  xmax=480, ymin=100),
+            _make_line("l2", xmin=50,  xmax=480, ymin=200),
+            _make_line("l3", xmin=50,  xmax=480, ymin=300),
+            _make_line("r0", xmin=520, xmax=950, ymin=10),
+            _make_line("r1", xmin=520, xmax=950, ymin=100),
+            _make_line("r2", xmin=520, xmax=950, ymin=200),
+            _make_line("r3", xmin=520, xmax=950, ymin=300),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 2  # default 2 % ≤ 4 %
+
+        _, count, _ = cluster_columns(
+            nodes, page_width=1000, min_gutter_fraction=0.08
+        )
+        assert count == 1  # 8 % > 4 %
 
 
 class TestFuseColinearSegments:

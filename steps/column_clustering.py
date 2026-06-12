@@ -1,16 +1,12 @@
 """Reading-order column clustering and co-linear segment fusion.
 
-Detects whether a page has one or two columns by analysing the distribution
-of line left-edge x-coordinates, then returns line node labels in reading
-order (left column top-to-bottom, then right column top-to-bottom).
-
-Two independent signals are used, either sufficient to declare two columns:
-  1. Bimodal xmin variance ratio: the optimal 1D two-cluster split explains
-     a large fraction of total xmin variance — i.e. lines form two tight
-     clusters of start positions regardless of how close the columns are.
-  2. Disjoint horizontal extents: every line in the left cluster ends before
-     any line in the right cluster begins — a direct geometric test that does
-     not depend on blank space between columns.
+Detects whether a page has one or two columns using a horizontal
+coverage-profile bimodal test.  A 1D array records, for each pixel column
+x, how many line bounding boxes cover that x position.  The search is
+scoped to the inner 20–80 % of the *text region* (min xmin → max xmax),
+which excludes blank page margins that would otherwise produce false gaps.
+A genuine 2-column page shows two distinct peaks (one per column) separated
+by a valley; a 1-column page shows a single continuous plateau.
 
 ``fuse_colinear_segments`` groups segments that belong to the same physical
 text line (identified by y-extent overlap) into logical ``FusedLine``
@@ -46,34 +42,43 @@ class FusedLine:
 def cluster_columns(
     line_nodes: list,
     page_width: int,
-    variance_threshold: float = 0.5,
-    min_gutter_fraction: float = 0.12,
+    bimodal_threshold: float = 0.5,
+    min_gutter_fraction: float = 0.02,
+    min_peak_count: int = 2,
 ) -> tuple:
     """Return line node labels in reading order and the detected column count.
 
+    Uses a horizontal coverage-profile bimodal test.  For each pixel column
+    x, the coverage value is the number of line bounding boxes that include
+    that x position.  The search is scoped to the inner 20–80 % of the text
+    region (min xmin → max xmax) to exclude blank page margins.
+
+    Two columns are declared when the coverage profile has a valley between
+    two substantial peaks — i.e. the profile is bimodal within the text
+    region.  A single-column page shows a continuous plateau; the test fails
+    and 1 column is returned.
+
+    BLLA spanning-bbox artefacts (where BLLA draws one bbox around lines in
+    both columns at the same y-position) only slightly elevate the valley
+    and do not eliminate the bimodal structure provided they are a minority
+    of the total lines, which is the typical case.
+
     Args:
-        line_nodes:           Line-level nodes from page.children after
-                              KrakenSegmentation.  Each node must expose
-                              ``bbox.xmin``, ``bbox.xmax``, ``bbox.ymin``,
-                              and ``label``.
-        page_width:           Image width in pixels (``page.image.shape[1]``).
-                              Reserved for future full-width line detection.
-        variance_threshold:   Minimum fraction of xmin variance that the
-                              two-cluster split must explain over the single-
-                              cluster baseline for the page to be treated as
-                              two-column.  Default 0.5.
-        min_gutter_fraction:  Minimum required distance from the median
-                              right-edge of well-contained left-cluster nodes
-                              to the leftmost right-cluster node, expressed as
-                              a fraction of ``page_width``.  In genuine
-                              2-column layout this distance covers the right
-                              margin of the left column plus the inter-column
-                              gutter, typically > 10 % of page width.  For
-                              BLLA line-splitting artifacts (where BLLA splits
-                              each physical line at a consistent horizontal
-                              gap) the left-half segments end close to the
-                              split point, giving a small distance < 12 %.
-                              Default 0.12 (12 % of page width).
+        line_nodes:          Line-level nodes from page.children after
+                             KrakenSegmentation.  Each node must expose
+                             ``bbox.xmin``, ``bbox.xmax``, ``bbox.ymin``,
+                             and ``label``.
+        page_width:          Image width in pixels (``page.image.shape[1]``).
+                             Used only for the minimum gutter width check.
+        bimodal_threshold:   Maximum ratio of valley coverage to the smaller
+                             column peak for the valley to be treated as a
+                             genuine gutter.  Default 0.5 (valley must be
+                             less than half the height of the shorter peak).
+        min_gutter_fraction: Minimum gutter width as a fraction of
+                             ``page_width``.  Default 0.02 (2 %).
+        min_peak_count:      Minimum coverage value each column peak must
+                             reach.  Guards against splitting a page where
+                             only 1–2 lines were detected.  Default 2.
 
     Returns:
         ``(sorted_labels, column_count, split_x)`` where ``sorted_labels``
@@ -87,121 +92,69 @@ def cluster_columns(
     if len(line_nodes) == 1:
         return [line_nodes[0].label], 1, None
 
-    xmins = np.array([node.bbox.xmin for node in line_nodes], dtype=float)
-    n = len(xmins)
-    total_var = float(np.var(xmins))
+    # Build 1-D coverage array: coverage[x] = # line bboxes covering column x.
+    coverage = np.zeros(page_width, dtype=int)
+    for nd in line_nodes:
+        x0 = max(0, nd.bbox.xmin)
+        x1 = min(page_width, nd.bbox.xmax)
+        if x1 > x0:
+            coverage[x0:x1] += 1
+
+    # Smooth with a 5-px window to suppress single-pixel gaps from polygon
+    # boundaries that don't quite touch.
+    kernel = np.ones(5) / 5
+    smooth = np.convolve(coverage.astype(float), kernel, mode="same")
+
+    # Scope the search to the inner 20–80 % of the text region so that blank
+    # page margins are excluded.
+    text_left = min(nd.bbox.xmin for nd in line_nodes)
+    text_right = max(nd.bbox.xmax for nd in line_nodes)
+    text_width = text_right - text_left
+    search_start = text_left + int(0.20 * text_width)
+    search_end = text_right - int(0.20 * text_width)
 
     two_column = False
     split_x = None
 
-    if total_var > 0:
-        sorted_x = np.sort(xmins)
-        best_combined_var = total_var
-        best_split_idx = None
+    if search_end > search_start:
+        band = smooth[search_start:search_end]
+        # Valley: x position of the minimum within the search band.
+        valley_offset = int(np.argmin(band))
+        valley_x = search_start + valley_offset
+        valley_val = float(smooth[valley_x])
 
-        for i in range(1, n):
-            left_var = float(np.var(sorted_x[:i])) if i > 1 else 0.0
-            right_var = float(np.var(sorted_x[i:])) if n - i > 1 else 0.0
-            combined = (i * left_var + (n - i) * right_var) / n
-            if combined < best_combined_var:
-                best_combined_var = combined
-                best_split_idx = i
+        # Peaks: maximum coverage on each side of the valley within the text
+        # region.  Using text_left/text_right (not search boundaries) gives
+        # the full column peak even when the valley is near the band edge.
+        left_peak = float(smooth[text_left:valley_x].max()) if valley_x > text_left else 0.0
+        right_peak = float(smooth[valley_x + 1:text_right].max()) if valley_x + 1 < text_right else 0.0
+        min_peak = min(left_peak, right_peak)
 
-        if best_split_idx is not None:
-            variance_reduction = 1.0 - best_combined_var / total_var
-            candidate_split_x = sorted_x[best_split_idx]
+        # Bimodal test: valley must be significantly lower than both peaks,
+        # and each peak must meet the minimum density requirement.
+        if (
+            min_peak >= min_peak_count
+            and valley_val < bimodal_threshold * min_peak
+        ):
+            # Gutter width: contiguous run of smooth values below the midpoint
+            # between the valley and the bimodal threshold × min_peak.
+            gutter_threshold = valley_val + (bimodal_threshold * min_peak - valley_val) * 0.5
+            in_gutter = smooth <= gutter_threshold
 
-            left_cands = [
-                nd for nd in line_nodes
-                if nd.bbox.xmin < candidate_split_x
-            ]
-            right_cands = [
-                nd for nd in line_nodes
-                if nd.bbox.xmin >= candidate_split_x
-            ]
+            # Walk left from valley_x to find gutter left edge.
+            gutter_left = valley_x
+            while gutter_left > text_left and in_gutter[gutter_left - 1]:
+                gutter_left -= 1
 
-            centroid_distance = (
-                float(np.mean([nd.bbox.xmin for nd in right_cands]))
-                - float(np.mean([nd.bbox.xmin for nd in left_cands]))
-            ) if left_cands and right_cands else 0.0
+            # Walk right from valley_x to find gutter right edge.
+            gutter_right = valley_x
+            while gutter_right + 1 < text_right and in_gutter[gutter_right + 1]:
+                gutter_right += 1
 
-            # Require centroids at least 5% of page width apart to avoid
-            # trivially small splits being misclassified as two columns.
-            min_separation = 0.05 * page_width
-
-            disjoint = False
-            approximately_disjoint = False
-            gutter_ok = False
-            if left_cands and right_cands:
-                max_left_xmax = max(nd.bbox.xmax for nd in left_cands)
-                min_right_xmin = min(nd.bbox.xmin for nd in right_cands)
-
-                disjoint = max_left_xmax < min_right_xmin
-
-                # At least 75% of left lines must end before the median
-                # right-cluster xmin. Uses median (not minimum) to tolerate
-                # one right-column line that starts unusually far left.
-                right_xmin_median = float(
-                    np.median([nd.bbox.xmin for nd in right_cands])
-                )
-                frac_contained = sum(
-                    1 for nd in left_cands
-                    if nd.bbox.xmax < right_xmin_median
-                ) / len(left_cands)
-                approximately_disjoint = frac_contained >= 0.75
-
-                if disjoint:
-                    # Clusters are strictly non-overlapping: use the raw gap
-                    # between the rightmost left edge and the leftmost right
-                    # edge.  A small positive gap (≥ 2 % page width) is
-                    # enough — this path only fires when no left-cluster node
-                    # reaches into the right cluster at all, so an actual
-                    # inter-column space is confirmed.
-                    actual_gutter = min_right_xmin - max_left_xmax
-                    gutter_ok = actual_gutter >= page_width * 0.02
-                else:
-                    # Clusters overlap (e.g. spanning notation nodes or
-                    # full-width lines exist).  Use the typical gap —
-                    # distance from the median right-edge of well-contained
-                    # left-cluster nodes to min_right_xmin — which is large
-                    # for genuine 2-column layout and small for BLLA
-                    # line-splitting artefacts.
-                    contained_xmax = [
-                        nd.bbox.xmax for nd in left_cands
-                        if nd.bbox.xmax < min_right_xmin
-                    ]
-                    if contained_xmax:
-                        median_cxmax = float(np.median(contained_xmax))
-                        typical_gap = min_right_xmin - median_cxmax
-                        typical_gap_ok = (
-                            typical_gap >= page_width * min_gutter_fraction
-                        )
-                        # Left-cluster text ending very close to the
-                        # right-cluster boundary (≥ 90 % of min_right_xmin)
-                        # indicates genuine 2-column text that fills the
-                        # column, not a BLLA half-line that ends before the
-                        # split point.  BLLA half-lines typically end at
-                        # ≈ 75–85 % of the split boundary.
-                        close_boundary = (
-                            median_cxmax / min_right_xmin >= 0.90
-                        )
-                        gutter_ok = typical_gap_ok or close_boundary
-                    else:
-                        gutter_ok = False
-
-            if (
-                (
-                    (
-                        variance_reduction >= variance_threshold
-                        and approximately_disjoint
-                    )
-                    or disjoint
-                )
-                and gutter_ok
-                and centroid_distance >= min_separation
-            ):
+            gutter_width = gutter_right - gutter_left
+            if gutter_width >= min_gutter_fraction * page_width:
                 two_column = True
-                split_x = candidate_split_x
+                split_x = float((gutter_left + gutter_right) / 2)
 
     if two_column:
         left_nodes = [nd for nd in line_nodes if nd.bbox.xmin < split_x]

@@ -185,7 +185,7 @@ def run(
     recognition_model: str | None = None,
     device: str = "cpu",
     line_offset: int = 0,
-    column_variance_threshold: float = 0.5,
+    column_bimodal_threshold: float = 0.5,
     prev_folio_state: "FolioState | None" = None,
     folio_state_out: str | None = None,
     debug_ocr: bool = False,
@@ -205,9 +205,9 @@ def run(
         line_offset: Cantus lines to skip before aligning with detected
             nodes.  Use when the image is a crop starting partway
             through the folio.
-        column_variance_threshold: Minimum fraction of xmin variance
-            explained by the two-cluster split for the page to be
-            treated as two-column.  See cluster_columns().
+        column_bimodal_threshold: Maximum ratio of the coverage-profile
+            valley to the smaller column peak for the valley to be
+            treated as a genuine inter-column gutter.  See cluster_columns().
         prev_folio_state: FolioState from the previous folio run.
             When provided, its remaining_words (post-77 continuation)
             are prepended to the flat text before alignment.
@@ -235,7 +235,7 @@ def run(
     sorted_labels, column_count, split_x = cluster_columns(
         line_nodes=list(page.children),
         page_width=page.image.shape[1],
-        variance_threshold=column_variance_threshold,
+        bimodal_threshold=column_bimodal_threshold,
     )
     logger.info("  %d column(s) detected", column_count)
 
@@ -482,11 +482,11 @@ def main() -> None:
              "the folio (default: 0).",
     )
     parser.add_argument(
-        "--column-variance-threshold",
+        "--column-bimodal-threshold",
         type=float, default=0.5, metavar="FLOAT",
-        help="Minimum fraction of x-start variance explained by a "
-             "two-cluster split for the page to be treated as two-column. "
-             "Higher values require tighter clusters (default: 0.5).",
+        help="Maximum ratio of the coverage-profile valley to the smaller "
+             "column peak for the valley to be treated as a genuine gutter. "
+             "Lower values require a deeper valley (default: 0.5).",
     )
     parser.add_argument(
         "--prev-folio-state", metavar="PATH", default=None,
@@ -524,7 +524,7 @@ def main() -> None:
         recognition_model=args.recognition_model,
         device=args.device,
         line_offset=args.line_offset,
-        column_variance_threshold=args.column_variance_threshold,
+        column_bimodal_threshold=args.column_bimodal_threshold,
         prev_folio_state=prev_state,
         folio_state_out=args.folio_state_out,
         debug_ocr=args.debug_ocr,
