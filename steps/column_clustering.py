@@ -45,6 +45,7 @@ def cluster_columns(
     bimodal_threshold: float = 0.5,
     min_gutter_fraction: float = 0.02,
     min_peak_count: int = 2,
+    min_column_fraction: float = 0.15,
 ) -> tuple:
     """Return line node labels in reading order and the detected column count.
 
@@ -64,21 +65,29 @@ def cluster_columns(
     of the total lines, which is the typical case.
 
     Args:
-        line_nodes:          Line-level nodes from page.children after
-                             KrakenSegmentation.  Each node must expose
-                             ``bbox.xmin``, ``bbox.xmax``, ``bbox.ymin``,
-                             and ``label``.
-        page_width:          Image width in pixels (``page.image.shape[1]``).
-                             Used only for the minimum gutter width check.
-        bimodal_threshold:   Maximum ratio of valley coverage to the smaller
-                             column peak for the valley to be treated as a
-                             genuine gutter.  Default 0.5 (valley must be
-                             less than half the height of the shorter peak).
-        min_gutter_fraction: Minimum gutter width as a fraction of
-                             ``page_width``.  Default 0.02 (2 %).
-        min_peak_count:      Minimum coverage value each column peak must
-                             reach.  Guards against splitting a page where
-                             only 1–2 lines were detected.  Default 2.
+        line_nodes:           Line-level nodes from page.children after
+                              KrakenSegmentation.  Each node must expose
+                              ``bbox.xmin``, ``bbox.xmax``, ``bbox.ymin``,
+                              and ``label``.
+        page_width:           Image width in pixels (``page.image.shape[1]``).
+                              Used only for the minimum gutter width check.
+        bimodal_threshold:    Maximum ratio of valley coverage to the smaller
+                              column peak for the valley to be treated as a
+                              genuine gutter.  Default 0.5 (valley must be
+                              less than half the height of the shorter peak).
+        min_gutter_fraction:  Minimum gutter width as a fraction of
+                              ``page_width``.  Default 0.02 (2 %).
+        min_peak_count:       Minimum coverage value each column peak must
+                              reach.  Guards against splitting a page with
+                              only a handful of detected lines or where a
+                              few outlier segments (initials, neumes) create
+                              a spurious left-side peak.  Default 2.
+        min_column_fraction:  Minimum fraction of all line nodes whose xmin
+                              must fall on each side of the candidate split.
+                              Rejects splits where one apparent "column"
+                              contains only a small minority of the total
+                              lines (e.g. isolated margin fragments).
+                              Default 0.15 (15 %).
 
     Returns:
         ``(sorted_labels, column_count, split_x)`` where ``sorted_labels``
@@ -152,9 +161,21 @@ def cluster_columns(
                 gutter_right += 1
 
             gutter_width = gutter_right - gutter_left
-            if gutter_width >= min_gutter_fraction * page_width:
+            candidate_split = float((gutter_left + gutter_right) / 2)
+            left_count = sum(
+                1 for nd in line_nodes if nd.bbox.xmin < candidate_split
+            )
+            right_count = sum(
+                1 for nd in line_nodes if nd.bbox.xmin >= candidate_split
+            )
+            total = len(line_nodes)
+            if (
+                gutter_width >= min_gutter_fraction * page_width
+                and left_count / total >= min_column_fraction
+                and right_count / total >= min_column_fraction
+            ):
                 two_column = True
-                split_x = float((gutter_left + gutter_right) / 2)
+                split_x = candidate_split
 
     if two_column:
         left_nodes = [nd for nd in line_nodes if nd.bbox.xmin < split_x]

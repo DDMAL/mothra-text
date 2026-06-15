@@ -106,10 +106,12 @@ class TestClusterColumns:
             _make_line("l0", xmin=50,  xmax=400, ymin=10),
             _make_line("l1", xmin=50,  xmax=400, ymin=200),
             _make_line("r0", xmin=600, xmax=950, ymin=200),
+            _make_line("l2", xmin=50,  xmax=400, ymin=300),
+            _make_line("r2", xmin=600, xmax=950, ymin=300),
         ]
         labels, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 2
-        assert labels == ["l0", "l1", "r1", "r0"]
+        assert labels == ["l0", "l1", "l2", "r1", "r0", "r2"]
 
     def test_spanning_bbox_minority_still_two_columns(self):
         # 6 column-contained lines + 2 BLLA spanning artefacts.
@@ -132,12 +134,13 @@ class TestClusterColumns:
             _make_line("l0", xmin=50,  xmax=400, ymin=10),
             _make_line("r2", xmin=600, xmax=950, ymin=300),
             _make_line("l1", xmin=50,  xmax=400, ymin=200),
+            _make_line("l2", xmin=50,  xmax=400, ymin=350),
             _make_line("r0", xmin=600, xmax=950, ymin=10),
             _make_line("r1", xmin=600, xmax=950, ymin=150),
         ]
         labels, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 2
-        assert labels == ["l0", "l1", "r0", "r1", "r2"]
+        assert labels == ["l0", "l1", "l2", "r0", "r1", "r2"]
 
     # ---- parameter control ----
 
@@ -151,7 +154,8 @@ class TestClusterColumns:
         assert count == 1
 
     def test_sparse_page_meets_min_peak_count_split(self):
-        # 2 lines per side — each peak equals min_peak_count=2.
+        # 2 lines per side — each peak meets min_peak_count=2 and each side
+        # is 50 % of total (≥ min_column_fraction=0.15).
         nodes = [
             _make_line("l0", xmin=50,  xmax=400, ymin=10),
             _make_line("l1", xmin=50,  xmax=400, ymin=100),
@@ -160,6 +164,45 @@ class TestClusterColumns:
         ]
         _, count, _ = cluster_columns(nodes, page_width=1000)
         assert count == 2
+
+    def test_outlier_left_margin_segments_not_split(self):
+        # 2 narrow left-margin outliers + 12 main-column lines = 14 total.
+        # Bimodal signal exists (outliers create a left peak of 2 ≥ min_peak_count=2)
+        # but left side is only 2/14 ≈ 14.3 % < min_column_fraction=0.15 → rejected.
+        nodes = [
+            _make_line("m0",  xmin=10,  xmax=80,  ymin=10),
+            _make_line("m1",  xmin=10,  xmax=80,  ymin=100),
+            _make_line("c0",  xmin=300, xmax=900, ymin=10),
+            _make_line("c1",  xmin=300, xmax=900, ymin=100),
+            _make_line("c2",  xmin=300, xmax=900, ymin=200),
+            _make_line("c3",  xmin=300, xmax=900, ymin=300),
+            _make_line("c4",  xmin=300, xmax=900, ymin=400),
+            _make_line("c5",  xmin=300, xmax=900, ymin=500),
+            _make_line("c6",  xmin=300, xmax=900, ymin=600),
+            _make_line("c7",  xmin=300, xmax=900, ymin=700),
+            _make_line("c8",  xmin=300, xmax=900, ymin=800),
+            _make_line("c9",  xmin=300, xmax=900, ymin=900),
+            _make_line("c10", xmin=300, xmax=900, ymin=1000),
+            _make_line("c11", xmin=300, xmax=900, ymin=1100),
+        ]
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 1
+
+    def test_min_column_fraction_controls_split(self):
+        # 3 left + 17 right = 15 % left exactly.
+        # Default min_column_fraction=0.15: 3/20=0.15 passes (≥ 0.15).
+        # Raised  min_column_fraction=0.20: 3/20=0.15 fails (< 0.20).
+        nodes = (
+            [_make_line(f"l{i}", xmin=50, xmax=400, ymin=i * 50) for i in range(3)]
+            + [_make_line(f"r{i}", xmin=600, xmax=950, ymin=i * 50) for i in range(17)]
+        )
+        _, count, _ = cluster_columns(nodes, page_width=1000)
+        assert count == 2  # 3/20 = 0.15 ≥ 0.15
+
+        _, count, _ = cluster_columns(
+            nodes, page_width=1000, min_column_fraction=0.20
+        )
+        assert count == 1  # 3/20 = 0.15 < 0.20
 
     def test_custom_bimodal_threshold_prevents_split(self):
         # 6 column lines + 3 spanning → valley=3, peaks=6, ratio=0.50.

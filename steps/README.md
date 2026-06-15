@@ -19,7 +19,7 @@ KrakenSegmentation  →  cluster_columns
 
 ## `column_clustering.py`
 
-### `cluster_columns(line_nodes, page_width, bimodal_threshold=0.5, min_gutter_fraction=0.02, min_peak_count=2)`
+### `cluster_columns(line_nodes, page_width, bimodal_threshold=0.5, min_gutter_fraction=0.02, min_peak_count=2, min_column_fraction=0.15)`
 
 Auto-detects 1 vs 2 columns using a **horizontal coverage-profile bimodal test**.
 For each pixel column `x`, `coverage[x]` counts the number of line bounding boxes
@@ -39,11 +39,14 @@ for single-column pages).
    produce spurious zero-coverage gaps.
 3. Find the deepest valley in the search band.
 4. Compute `left_peak` and `right_peak` on each side of the valley.
-5. Declare two columns when:
+5. Declare two columns when all of the following hold:
    - `valley < bimodal_threshold × min(left_peak, right_peak)` (default 0.5 — valley
      must be less than half the smaller peak),
-   - both peaks reach `min_peak_count` (default 2 lines), and
-   - the gutter width ≥ `min_gutter_fraction × page_width` (default 2 %).
+   - both peaks reach `min_peak_count` (default 2 lines),
+   - the gutter width ≥ `min_gutter_fraction × page_width` (default 2 %), and
+   - each side of the candidate split contains at least `min_column_fraction` (default
+     15 %) of all line nodes — rejects false splits driven by a handful of outlier
+     segments (initials, neumes) far from the main text block.
 
 BLLA spanning-bbox artefacts (one bbox drawn across both columns at the same
 y-position) only slightly elevate the valley and do not eliminate the bimodal
