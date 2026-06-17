@@ -46,6 +46,7 @@ def cluster_columns(
     min_gutter_fraction: float = 0.02,
     min_peak_count: int = 2,
     min_column_fraction: float = 0.15,
+    forced_column_count: int | None = None,
 ) -> tuple:
     """Return line node labels in reading order and the detected column count.
 
@@ -88,6 +89,13 @@ def cluster_columns(
                               contains only a small minority of the total
                               lines (e.g. isolated margin fragments).
                               Default 0.15 (15 %).
+        forced_column_count:  When 1 or 2, skip bimodal auto-detection and
+                              use this count directly.  For 1, nodes are
+                              sorted by ymin and returned immediately.  For
+                              2, auto-detection still runs to find split_x;
+                              if it fails, the coverage-profile valley is
+                              used instead (page midpoint as last resort).
+                              ``None`` (default) preserves existing behaviour.
 
     Returns:
         ``(sorted_labels, column_count, split_x)`` where ``sorted_labels``
@@ -100,6 +108,11 @@ def cluster_columns(
         return [], 0, None
     if len(line_nodes) == 1:
         return [line_nodes[0].label], 1, None
+
+    if forced_column_count == 1:
+        sorted_nodes = sorted(line_nodes, key=lambda nd: nd.bbox.ymin)
+        logger.info("Forced 1 column")
+        return [nd.label for nd in sorted_nodes], 1, None
 
     # Build 1-D coverage array: coverage[x] = # line bboxes covering column x.
     coverage = np.zeros(page_width, dtype=int)
@@ -124,6 +137,7 @@ def cluster_columns(
 
     two_column = False
     split_x = None
+    valley_x = None
 
     if search_end > search_start:
         band = smooth[search_start:search_end]
@@ -176,6 +190,16 @@ def cluster_columns(
             ):
                 two_column = True
                 split_x = candidate_split
+
+    # When the user forced 2 columns but auto-detection found no split, derive
+    # split_x from the coverage-profile valley (page midpoint as last resort).
+    if forced_column_count == 2 and not two_column:
+        if valley_x is not None:
+            split_x = float(valley_x)
+        else:
+            split_x = float(page_width / 2)
+        two_column = True
+        logger.info("Forced 2 columns (split at x=%.0f)", split_x)
 
     if two_column:
         left_nodes = [nd for nd in line_nodes if nd.bbox.xmin < split_x]

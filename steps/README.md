@@ -19,7 +19,7 @@ KrakenSegmentation  →  cluster_columns
 
 ## `column_clustering.py`
 
-### `cluster_columns(line_nodes, page_width, bimodal_threshold=0.5, min_gutter_fraction=0.02, min_peak_count=2, min_column_fraction=0.15)`
+### `cluster_columns(line_nodes, page_width, bimodal_threshold=0.5, min_gutter_fraction=0.02, min_peak_count=2, min_column_fraction=0.15, forced_column_count=None)`
 
 Auto-detects 1 vs 2 columns using a **horizontal coverage-profile bimodal test**.
 For each pixel column `x`, `coverage[x]` counts the number of line bounding boxes
@@ -56,6 +56,13 @@ means blank page margins never produce false two-column splits.
 Use `--column-bimodal-threshold` to tune sensitivity; raise it to accept a shallower
 valley (more aggressive 2-column detection), lower it to require a deeper valley
 (stricter).
+
+**`forced_column_count` parameter:** Pass `1` or `2` to bypass bimodal auto-detection
+entirely. `forced_column_count=1` short-circuits before the coverage analysis and
+returns nodes sorted by `ymin`. `forced_column_count=2` still runs the coverage
+analysis to find `split_x`; if the bimodal test fails (e.g. a poorly-scanned gutter),
+`split_x` falls back to the coverage-profile valley position, or to the page midpoint
+as a last resort. Set via `--column-count` in `run_pipeline.py`.
 
 ### `FusedLine` dataclass
 

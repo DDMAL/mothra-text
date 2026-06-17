@@ -19,6 +19,7 @@ in the Cantus CSV (e.g. "002r", not "2r").
 import argparse
 import json
 import logging
+import statistics
 import sys
 from pathlib import Path
 
@@ -189,6 +190,7 @@ def run(
     prev_folio_state: "FolioState | None" = None,
     folio_state_out: str | None = None,
     debug_ocr: bool = False,
+    column_count: int | None = None,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
@@ -216,6 +218,10 @@ def run(
             next folio).
         debug_ocr: When True, print per-fused-line OCR text and NW
             alignment detail to stdout for diagnosis.
+        column_count: When 1 or 2, declares the folio column count and
+            skips bimodal auto-detection.  Pass the appropriate
+            column-specific model via ``segmentation_model``.  ``None``
+            (default) preserves existing auto-detection behaviour.
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level
@@ -223,9 +229,15 @@ def run(
     """
     collection = Collection([image_path])
 
+    # Model selection: when --column-count is given the caller should pass the
+    # appropriate fine-tuned model via --segmentation-model. In future this
+    # block can insert hardwired per-column defaults when segmentation_model
+    # is None.
+    effective_model = segmentation_model
+
     # Stage 1: Kraken BLLA line segmentation
     logger.info("Stage 1: Kraken line segmentation")
-    collection = KrakenSegmentation(device=device, model=segmentation_model).run(collection)
+    collection = KrakenSegmentation(device=device, model=effective_model).run(collection)
     n_lines = sum(1 for _ in collection.active_leaves())
     logger.info("  %d line nodes", n_lines)
 
@@ -236,6 +248,7 @@ def run(
         line_nodes=list(page.children),
         page_width=page.image.shape[1],
         bimodal_threshold=column_bimodal_threshold,
+        forced_column_count=column_count,
     )
     logger.info("  %d column(s) detected", column_count)
 
@@ -373,23 +386,12 @@ def run(
     return collection, manifest
 
 
-def export_json(
+def _build_pipeline_payload(
     collection: Collection,
     image_path: str,
     manifest: dict[str, str],
-    out_path: str,
-) -> None:
-    """Write line polygons and word bboxes to a GUI-compatible JSON file.
-
-    All coordinates are absolute image pixels.
-
-    Args:
-        collection: Collection after SyllableSegmentation.
-        image_path: Original folio image path (used for folio name).
-        manifest:   Node-label → Cantus-text mapping; used to tag words
-                    as 'gt' (label in manifest) or 'fallback'.
-        out_path:   Destination path for the JSON file.
-    """
+) -> dict:
+    """Build the GUI-compatible JSON payload dict from a completed pipeline run."""
     page = next(iter(collection))
     lines = []
     for line_node in page.children:
@@ -422,15 +424,57 @@ def export_json(
         })
 
     img = page.image
-    payload = {
+    return {
         "folio": Path(image_path).stem,
         "image_width": img.shape[1],
         "image_height": img.shape[0],
         "lines": lines,
     }
+
+
+def export_json(
+    collection: Collection,
+    image_path: str,
+    manifest: dict[str, str],
+    out_path: str,
+) -> None:
+    """Write line polygons and word bboxes to a GUI-compatible JSON file."""
+    payload = _build_pipeline_payload(collection, image_path, manifest)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
     logger.info("Exported pipeline JSON to %s", out_path)
+
+
+def _write_mei_json(payload: dict, out_path: str) -> None:
+    """Convert a pipeline payload dict to MEI Text Alignment JSON and write it."""
+    lines = payload.get("lines", [])
+    y_centers = sorted(
+        (line["bbox"][1] + line["bbox"][3]) / 2
+        for line in lines
+        if "bbox" in line
+    )
+    diffs = [y_centers[i + 1] - y_centers[i] for i in range(len(y_centers) - 1)]
+    med = statistics.quantiles(diffs, n=4)[2] if len(diffs) >= 2 else 0.0
+
+    syl_boxes = []
+    for line in lines:
+        for word in line.get("words", []):
+            for syl in word.get("syllables", []):
+                text = (syl.get("text") or "").rstrip("-")
+                if text:
+                    bb = syl["bbox"]
+                    syl_boxes.append({
+                        "syl": text,
+                        "ul": [int(bb[0]), int(bb[1])],
+                        "lr": [int(bb[2]), int(bb[3])],
+                    })
+
+    result = {"median_line_spacing": med, "syl_boxes": syl_boxes}
+    Path(out_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+    Path(out_path).expanduser().write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info("Exported MEI input JSON to %s (%d syllables)", out_path, len(syl_boxes))
 
 
 def _summarise(collection: Collection) -> None:
@@ -464,6 +508,14 @@ def main() -> None:
                         help="Local path to a custom Kraken BLLA segmentation "
                              "model (.mlmodel or .safetensors). Omit to use "
                              "Kraken's built-in default BLLA model.")
+    parser.add_argument(
+        "--column-count", type=int, choices=[1, 2], default=None,
+        metavar="{1,2}",
+        help="Declare the folio column count. When given, skips bimodal "
+             "column auto-detection. Pass the appropriate column-specific "
+             "fine-tuned model via --segmentation-model. Omit to use "
+             "existing auto-detection behaviour.",
+    )
     parser.add_argument("--recognition-model", default=None,
                         metavar="MODEL_ID_OR_PATH",
                         help="HuggingFace model ID or local path to a Kraken "
@@ -474,6 +526,12 @@ def main() -> None:
     parser.add_argument(
         "--export-json", metavar="PATH", default=None,
         help="If given, write pipeline output JSON for the GUI to PATH.",
+    )
+    parser.add_argument(
+        "--mei-json", metavar="PATH", default=None,
+        help="If given, write MEI encoding Text Alignment JSON to PATH. "
+             "Produces the same output as running scripts/convert_to_mei_input.py "
+             "on the --export-json file.",
     )
     parser.add_argument(
         "--line-offset", type=int, default=0, metavar="N",
@@ -528,11 +586,20 @@ def main() -> None:
         prev_folio_state=prev_state,
         folio_state_out=args.folio_state_out,
         debug_ocr=args.debug_ocr,
+        column_count=args.column_count,
     )
     _summarise(collection)
 
-    if args.export_json:
-        export_json(collection, image_path, manifest, args.export_json)
+    if args.export_json or args.mei_json:
+        payload = _build_pipeline_payload(collection, image_path, manifest)
+
+        if args.export_json:
+            with open(args.export_json, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            logger.info("Exported pipeline JSON to %s", args.export_json)
+
+        if args.mei_json:
+            _write_mei_json(payload, args.mei_json)
 
 
 if __name__ == "__main__":

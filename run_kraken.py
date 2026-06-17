@@ -1,9 +1,7 @@
 """
 Run Kraken's BLLA baseline segmenter against folio images and save
 visualised outputs (baselines + bounding polygons drawn on originals)
-to outputs/kraken_blla/, plus segmentation JSON to
-outputs/kraken_blla/segmentation/{stem}_kraken.json for use by
-mothra-evaluator.
+and segmentation JSON directly to the output directory.
 """
 
 import argparse
@@ -83,11 +81,11 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--folios", default=FOLIO_DIR)
-    parser.add_argument("--output", default=os.path.dirname(OUT_DIR))
+    parser.add_argument("--output", default=OUT_DIR)
     parser.add_argument("--model", default=None)
     args = parser.parse_args()
 
-    out_dir = os.path.join(args.output, "kraken_blla")
+    out_dir = args.output
     os.makedirs(out_dir, exist_ok=True)
     paths = load_images(args.folios)
     print(f"Found {len(paths)} image(s)")
@@ -108,13 +106,10 @@ def main():
 
     model_name = os.path.basename(args.model) if args.model else "kraken_blla"
 
-    seg_dir = os.path.join(out_dir, "segmentation")
-    os.makedirs(seg_dir, exist_ok=True)
-
     for path in paths:
         stem = os.path.splitext(os.path.basename(path))[0]
         out_path = os.path.join(out_dir, f"{stem}_kraken.jpg")
-        json_path = os.path.join(seg_dir, f"{stem}_kraken.json")
+        json_path = os.path.join(out_dir, f"{stem}_kraken.json")
         if os.path.exists(out_path) and os.path.exists(json_path):
             print(f"  {stem} ... skipped (output exists)")
             continue

@@ -83,17 +83,22 @@ python run_pipeline.py \
     --source-id 123672 \
     --recognition-model path/to/model.mlmodel \
     --export-json output.json \
+    --mei-json mei_input.json \
     --folio-state-out state.json
 ```
 
 Key flags:
 - `--source-id` or `--csv` — Cantus source (fetched or local)
 - `--segmentation-model` — custom Kraken BLLA model (`.mlmodel` or `.safetensors`); omit to use Kraken's built-in default
+- `--column-count {1,2}` — declare the folio column count; skips bimodal auto-detection; omit to use existing auto-detection behaviour
 - `--recognition-model` — Kraken HTR model; omit for stub mode (empty text, pipeline still completes)
 - `--line-offset N` — skip first N volpiano line-break markers before aligning (for cropped images)
 - `--prev-folio-state` / `--folio-state-out` — pass post-77 continuation words (or unconsumed tail) between folio runs
 - `--export-json` — write output for the Pipeline Inspector GUI
+- `--mei-json` — write MEI encoding Text Alignment JSON (flat `syl_boxes` format consumed by the MEI encoding job); can be used alongside or instead of `--export-json`
 - `--debug-ocr` — print per-line OCR transcripts and NW alignment detail to stdout
+
+When using `--column-count`, pass the appropriate column-specific fine-tuned model via `--segmentation-model`. Without a `--segmentation-model`, the pipeline falls back to Kraken's built-in default (future versions may provide hardwired per-column defaults).
 
 ### 6. Ground-truth-aware word segmentation
 
