@@ -32,6 +32,38 @@ One `.xml` is written per `.json`; failures are logged and the batch continues.
 
 ---
 
+## convert_to_mei_input.py
+
+Converts a mothra-text `--export-json` output file to the **Text Alignment JSON** format
+expected by the MEI encoding job.
+
+```
+python scripts/convert_to_mei_input.py --input PATH --output PATH [options]
+
+required arguments:
+  --input PATH          path to mothra-text pipeline JSON (from --export-json)
+  --output PATH         destination path for MEI Text Alignment JSON
+
+options:
+  --exclude-fallback    skip syllables from lines that received no Cantus
+                        ground truth text (source == "fallback")
+  --log-level LEVEL     DEBUG | INFO | WARNING | ERROR (default: INFO)
+```
+
+**Example**
+
+```
+python scripts/convert_to_mei_input.py \
+    --input ~/Downloads/DDMAL/006r_pipeline.json \
+    --output ~/Downloads/DDMAL/006r_mei_input.json
+```
+
+The output JSON has two keys: `median_line_spacing` (75th-percentile of line-spacing
+differences, matching the original Rodan text alignment formula) and `syl_boxes` (flat
+list of `{syl, ul, lr}` entries in reading order).
+
+---
+
 ## build_gt_manifest.py
 
 > **Legacy script.** Uses the older `build_page_manifest()` approach (direct volpiano-to-line
