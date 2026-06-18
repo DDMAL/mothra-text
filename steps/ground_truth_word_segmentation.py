@@ -9,9 +9,7 @@ import logging
 from collections.abc import Callable
 from typing import Optional
 
-# noqa: F401 — load_manifest / make_manifest_lookup re-exported for callers
 from steps.gt_manifest import (  # noqa: F401
-    load_manifest,
     make_manifest_lookup,
 )
 

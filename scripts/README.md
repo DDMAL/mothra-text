@@ -62,33 +62,3 @@ The output JSON has two keys: `median_line_spacing` (75th-percentile of line-spa
 differences, matching the original Rodan text alignment formula) and `syl_boxes` (flat
 list of `{syl, ul, lr}` entries in reading order).
 
----
-
-## build_gt_manifest.py
-
-> **Legacy script.** Uses the older `build_page_manifest()` approach (direct volpiano-to-line
-> mapping), which breaks when a chant begins mid-line after the previous chant ends.
-> For new work, use `run_pipeline.py --export-json` instead — it uses the NW-based
-> allocator and handles mid-line chant starts correctly.
-
-Builds a ground-truth manifest for one folio page. Downloads the Cantus CSV for a manuscript source, splits each chant's text into per-line fragments using volpiano `7` markers, and writes a JSON manifest mapping HTRflow node labels to their Cantus text fragments.
-
-```
-python scripts/build_gt_manifest.py \
-    --source-id <int> \
-    --folio <str> \
-    --node-labels-file <path> \
-    --output <path>
-```
-
-The `--source-id` is the integer Cantus source ID from cantusdatabase.org. The node-labels file should contain one HTRflow node label per line in reading order (readable from `id` attributes on `<TextLine>` elements in PAGE XML output).
-
-**Example**
-
-```
-python scripts/build_gt_manifest.py \
-    --source-id 123723 \
-    --folio "006r" \
-    --node-labels-file node_labels.txt \
-    --output data/manifests/manifest_006r.json
-```

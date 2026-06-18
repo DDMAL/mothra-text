@@ -203,7 +203,8 @@ def build_page_manifest(
     )
     if excluded:
         logger.info(
-            "  Excluded %d mode='*' row(s) for folio %r (not physically present)",
+            "  Excluded %d mode='*' row(s) for folio %r"
+            " (not physically present)",
             excluded, folio,
         )
     folio_rows.sort(key=lambda r: int(r.get("sequence") or 0))
@@ -275,7 +276,3 @@ def load_local_csv(path: str | Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def load_manifest(path: str | Path) -> dict[str, str]:
-    """Load a manifest JSON file saved by build_gt_manifest.py."""
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)

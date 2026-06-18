@@ -123,7 +123,6 @@ Utility and conversion scripts in `scripts/`:
 | `mothra_to_page.py` | Convert Mothra Annotator JSON → PAGE XML (for BLLA training data) |
 | `convert_to_mei_input.py` | Convert pipeline JSON → MEI Text Alignment JSON |
 | `debug_column_detection.py` | Visualize bimodal column detection coverage profile |
-| `build_gt_manifest.py` | Legacy manifest builder (replaced by NW allocator in `run_pipeline.py`) |
 
 See [`scripts/README.md`](scripts/README.md) for usage.
 
