@@ -23,6 +23,25 @@ import statistics
 import sys
 from pathlib import Path
 
+
+def _find_tridis_model() -> str | None:
+    """Return the local path to the Tridis model, or None if not installed.
+
+    Searches the htrmopo cache directory (platform-appropriate via platformdirs)
+    for the Tridis .mlmodel file. Works on any machine where the model has been
+    installed with htrmopo regardless of the UUID-named subdirectory.
+    """
+    try:
+        from platformdirs import user_data_dir
+        htrmopo_dir = Path(user_data_dir("htrmopo"))
+        matches = list(htrmopo_dir.glob("*/Tridis_Medieval_EarlyModern.mlmodel"))
+        return str(matches[0]) if matches else None
+    except Exception:
+        return None
+
+
+_DEFAULT_RECOGNITION_MODEL = _find_tridis_model()
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htrflow.volume.volume import Collection  # noqa: E402
@@ -412,7 +431,7 @@ def _build_pipeline_payload(
                 "label": word_node.label,
                 "text": word_node.text or "",
                 "bbox": [wbbox.xmin, wbbox.ymin, wbbox.xmax, wbbox.ymax],
-                "source": "gt" if line_node.label in manifest else "fallback",
+                "source": "gt" if manifest.get(line_node.label) else "fallback",
                 "syllables": syllables,
             })
         lines.append({
@@ -516,11 +535,17 @@ def main() -> None:
              "fine-tuned model via --segmentation-model. Omit to use "
              "existing auto-detection behaviour.",
     )
-    parser.add_argument("--recognition-model", default=None,
-                        metavar="MODEL_ID_OR_PATH",
-                        help="HuggingFace model ID or local path to a Kraken "
-                             ".mlmodel file. Omit to run in stub mode "
-                             "(empty text, pipeline still completes).")
+    parser.add_argument("--recognition-model", default=_DEFAULT_RECOGNITION_MODEL,
+                        metavar="PATH",
+                        help="Local path to a Kraken .mlmodel recognition model. "
+                             "Defaults to the Tridis model if installed via htrmopo "
+                             "(install: python -m htrmopo get 10.5281/zenodo.7899855). "
+                             "Use --stub-mode to skip recognition entirely.")
+    parser.add_argument("--stub-mode", action="store_true", default=False,
+                        help="Skip text recognition. All lines get empty text; "
+                             "the pipeline still runs and produces word/syllable "
+                             "geometry from ground truth. Takes precedence over "
+                             "--recognition-model.")
     parser.add_argument("--device", default="cpu",
                         help="Kraken inference device (default: cpu).")
     parser.add_argument(
@@ -567,6 +592,17 @@ def main() -> None:
     if not Path(image_path).exists():
         parser.error(f"Image not found: {image_path}")
 
+    if args.stub_mode:
+        recognition_model = None
+    else:
+        recognition_model = args.recognition_model
+        if recognition_model is None:
+            print(
+                "Warning: Tridis recognition model not found. Running in stub mode.\n"
+                "Install with: python -m htrmopo get 10.5281/zenodo.7899855",
+                file=sys.stderr,
+            )
+
     prev_state = (
         read_folio_state(args.prev_folio_state)
         if args.prev_folio_state
@@ -579,7 +615,7 @@ def main() -> None:
         source_id=args.source_id,
         csv_path=args.csv,
         segmentation_model=args.segmentation_model,
-        recognition_model=args.recognition_model,
+        recognition_model=recognition_model,
         device=args.device,
         line_offset=args.line_offset,
         column_bimodal_threshold=args.column_bimodal_threshold,

@@ -7,8 +7,9 @@ import sys
 
 PYTHON = sys.executable
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_DEFAULT_FOLIOS = os.path.join(_HERE, "data", "folios")
-_DEFAULT_OUTPUT = os.path.join(_HERE, "outputs")
+_ROOT = os.path.dirname(_HERE)
+_DEFAULT_FOLIOS = os.path.join(_ROOT, "data", "folios")
+_DEFAULT_OUTPUT = os.path.join(_ROOT, "outputs")
 
 
 def main():
@@ -17,9 +18,13 @@ def main():
     parser.add_argument("--output", default=_DEFAULT_OUTPUT)
     args = parser.parse_args()
 
-    for script in ("run_htrflow.py", "run_kraken.py"):
+    scripts = [
+        os.path.join(_HERE, "run_htrflow.py"),
+        os.path.join(_ROOT, "run_kraken.py"),
+    ]
+    for script in scripts:
         result = subprocess.run([
-            PYTHON, os.path.join(_HERE, script),
+            PYTHON, script,
             "--folios", args.folios,
             "--output", args.output,
         ])

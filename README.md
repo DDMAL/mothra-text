@@ -1,35 +1,98 @@
 # mothra-text
 
-Experiments and pipeline components for HTR and HTR-OMR alignment on medieval chant manuscripts.
+Pipeline and tools for HTR and HTR-OMR alignment on medieval chant manuscripts.
+The primary artifact is `run_pipeline.py`, which runs a folio image through line segmentation,
+Cantus text alignment, and word/syllable geometry generation. Two visualization tools
+(Pipeline Inspector GUI and PAGE XML Viewer) let you inspect the output.
+
+For comparative segmentation experiments and PyLaia baselines, see [`experiments/README.md`](experiments/README.md).
+
+---
 
 ## Projects
 
-### 1. Line segmentation model comparison
+### 1. End-to-end PoC pipeline
 
-Three line segmentation models compared head-to-head on a set of medieval manuscript folio images.
-See the [Running](#running) section below for how to run them.
+`run_pipeline.py` runs a single folio image through the full pipeline:
 
-| Model | Tool | HuggingFace ID |
-|---|---|---|
-| YOLOv9 lines | htrflow | `Riksarkivet/yolov9-lines-1` |
-| RTMDet lines | htrflow | `Riksarkivet/rtmdet_lines` |
-| BLLA baseline segmenter | Kraken | (built-in default model) |
+1. **Kraken BLLA** — baseline line segmentation
+2. **Column clustering** — auto-detect 1 vs 2 columns; sort lines into reading order
+3. **Co-linear segment fusion** — fuse BLLA sub-segments belonging to the same physical
+   text line (≥50% y-extent overlap) into logical lines, correcting BLLA over-segmentation
+   on chant manuscripts with neume notation
+4. **Kraken HTR** — text recognition per logical line
+5. **NW chant allocator** — align Cantus CSV text to detected lines via Needleman-Wunsch,
+   using volpiano break markers as alignment anchors; supports folio-to-folio continuation
+   via JSON sidecar (`--folio-state-out`); in no-volpiano mode, automatically locates
+   where this folio's first chant begins via NW matching and assigns pre-start lines to
+   the previous folio's continuation (see `locate_folio_start` and `pre_start_suffix_align`
+   in [`steps/README.md`](steps/README.md))
+6. **GT word segmentation** — distribute Cantus words across each line's pixel extent
+7. **Syllable segmentation** — subdivide each word node into character-proportional
+   syllable regions using Latin syllabification from `volpiano-display-utilities`
 
-### 2. PyLaia HTR baselines
+See [`steps/README.md`](steps/README.md) for details on each step.
 
-Zero-shot HTR on a 4-folio subset using two PyLaia models trained on medieval Latin manuscripts
-(Teklia/pylaia-home-alcar and Teklia/pylaia-himanis). See `experiments/pylaia_baseline/`.
+```bash
+python run_pipeline.py \
+    --image path/to/folio.jpg \
+    --folio "006r" \
+    --source-id 123672 \
+    --export-json ~/Downloads/DDMAL/006r.json
+```
 
-### 3. Pipeline Inspector GUI
+**Key flags:**
+
+| Flag | Description |
+|---|---|
+| `--source-id INT` | Cantus source ID (fetched from cantusdatabase.org) |
+| `--csv PATH` | Local Cantus-format CSV file (alternative to `--source-id`) |
+| `--segmentation-model PATH` | Custom Kraken BLLA model (`.mlmodel` or `.safetensors`); omit for Kraken built-in |
+| `--column-count {1,2}` | Declare column count; skips bimodal auto-detection |
+| `--recognition-model PATH` | Kraken HTR model; defaults to Tridis if installed |
+| `--stub-mode` | Skip text recognition; pipeline still runs using ground-truth text |
+| `--line-offset N` | Skip first N volpiano line-break markers (for cropped images) |
+| `--prev-folio-state PATH` | JSON sidecar from the previous folio run (post-77 continuation words) |
+| `--folio-state-out PATH` | Write folio state JSON for the next folio run |
+| `--export-json PATH` | Write output JSON for the Pipeline Inspector GUI |
+| `--mei-json PATH` | Write MEI Text Alignment JSON (flat `syl_boxes` format) |
+| `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail |
+
+**Recognition model:** The Tridis model (`Tridis_Medieval_EarlyModern.mlmodel`) is used by
+default if installed via htrmopo. To install:
+```bash
+python -m htrmopo get 10.5281/zenodo.7899855
+```
+Use `--stub-mode` to skip recognition entirely (pipeline still produces GT word/syllable geometry).
+
+**Multi-folio runs:**
+```bash
+# First folio
+python run_pipeline.py --image 006r.jpg --folio 006r --source-id 123672 \
+    --export-json ~/Downloads/DDMAL/006r.json --folio-state-out state_006r.json
+
+# Next folio, with continuation from the previous
+python run_pipeline.py --image 007v.jpg --folio 007v --source-id 123672 \
+    --prev-folio-state state_006r.json --export-json ~/Downloads/DDMAL/007v.json
+```
+
+---
+
+### 2. Pipeline Inspector GUI
 
 A browser-based viewer for inspecting pipeline output — folio image overlaid with
-Kraken line polygons and word bounding boxes, with per-layer toggles.
+line polygons, word bounding boxes, and syllable regions, with per-layer toggles.
 
-**Live:** https://ddmal.github.io/mothra-text/ — load any folio image + pipeline JSON,
-no install required. See [`gui/README.md`](gui/README.md) for usage and how to generate
-the pipeline JSON with `run_pipeline.py --export-json`.
+**Live:** https://ddmal.github.io/mothra-text/ — load any folio image + pipeline JSON
+generated by `run_pipeline.py --export-json`, no install required.
 
-### 4. PAGE XML Viewer
+**Word box colors:** teal = Cantus ground truth, rose = OCR fallback (no GT available).
+
+See [`gui/README.md`](gui/README.md) for usage and local development instructions.
+
+---
+
+### 3. PAGE XML Viewer
 
 A lightweight Python desktop viewer for inspecting PAGE XML annotation files overlaid on
 their source manuscript images. Useful for verifying ground-truth annotations produced by
@@ -44,68 +107,25 @@ python page_viewer.py image.jpg annotation.xml # pre-load both on startup
 
 **Features:**
 - Renders TextRegions, TextLines, Words, Baselines, and Glyphs as colour-coded overlays
-- Per-layer visibility toggles (checkboxes)
-- Scroll-wheel zoom centred on the cursor; click-and-drag pan; Reset View button
-- Click an annotation to select it and see its ID, type, text content, and attributes in the sidebar
-- Hover highlighting — outline thickens when the mouse is over an annotation
-- Graceful handling of missing images: prompts you to locate the file manually
-- No extra dependencies beyond **Pillow** (`pip install pillow`), which is already needed by the other scripts
+- Per-layer visibility toggles
+- Scroll-wheel zoom centred on cursor; click-and-drag pan
+- Click an annotation to see its ID, type, text, and attributes in the sidebar
+- No extra dependencies beyond **Pillow** (already required by other scripts)
 
-### 5. End-to-end PoC pipeline
+---
 
-`run_pipeline.py` runs a single folio image through the full pipeline:
+### 4. Scripts
 
-1. **Kraken BLLA** — baseline line segmentation
-2. **Column clustering** — auto-detect 1 vs 2 columns; sort lines into reading order
-3. **Kraken HTR** — text recognition per line node
-4. **Co-linear segment fusion** — fuse BLLA sub-segments that belong to the same physical
-   text line (identified by ≥50% y-extent overlap) into logical lines before NW alignment,
-   correcting BLLA over-segmentation on chant manuscripts with neume notation
-5. **NW chant allocator** — align Cantus CSV text to detected lines via Needleman-Wunsch,
-   using volpiano break markers as alignment anchors; supports folio-to-folio continuation
-   via CSV backward-lookup and optional JSON sidecar (`--folio-state-out`); in no-volpiano
-   mode, automatically locates where this folio's first chant begins on the page by
-   NW-matching the chant's opening text against each OCR line, then assigns the preceding
-   lines to the previous folio's bleeding continuation — if the preceding folio also lacks
-   volpiano, aligns the pre-start OCR against the preceding folio's last chant text to find
-   and assign the correct CSV suffix (see `locate_folio_start` and `pre_start_suffix_align`
-   in [`steps/README.md`](steps/README.md))
-6. **GT word segmentation** — distribute Cantus words across each line's pixel extent
-7. **Syllable segmentation** — subdivide each word node into character-proportional
-   syllable regions using Latin syllabification from `volpiano-display-utilities`
+Utility and conversion scripts in `scripts/`:
 
-See [`steps/README.md`](steps/README.md) for details on each step.
+| Script | Description |
+|---|---|
+| `mothra_to_page.py` | Convert Mothra Annotator JSON → PAGE XML (for BLLA training data) |
+| `convert_to_mei_input.py` | Convert pipeline JSON → MEI Text Alignment JSON |
+| `debug_column_detection.py` | Visualize bimodal column detection coverage profile |
+| `build_gt_manifest.py` | Legacy manifest builder (replaced by NW allocator in `run_pipeline.py`) |
 
-```bash
-python run_pipeline.py \
-    --image path/to/folio.jpg \
-    --folio "006r" \
-    --source-id 123672 \
-    --recognition-model path/to/model.mlmodel \
-    --export-json output.json \
-    --mei-json mei_input.json \
-    --folio-state-out state.json
-```
-
-Key flags:
-- `--source-id` or `--csv` — Cantus source (fetched or local)
-- `--segmentation-model` — custom Kraken BLLA model (`.mlmodel` or `.safetensors`); omit to use Kraken's built-in default
-- `--column-count {1,2}` — declare the folio column count; skips bimodal auto-detection; omit to use existing auto-detection behaviour
-- `--recognition-model` — Kraken HTR model; omit for stub mode (empty text, pipeline still completes)
-- `--line-offset N` — skip first N volpiano line-break markers before aligning (for cropped images)
-- `--prev-folio-state` / `--folio-state-out` — pass post-77 continuation words (or unconsumed tail) between folio runs
-- `--export-json` — write output for the Pipeline Inspector GUI
-- `--mei-json` — write MEI encoding Text Alignment JSON (flat `syl_boxes` format consumed by the MEI encoding job); can be used alongside or instead of `--export-json`
-- `--debug-ocr` — print per-line OCR transcripts and NW alignment detail to stdout
-
-When using `--column-count`, pass the appropriate column-specific fine-tuned model via `--segmentation-model`. Without a `--segmentation-model`, the pipeline falls back to Kraken's built-in default (future versions may provide hardwired per-column defaults).
-
-### 6. Ground-truth-aware word segmentation
-
-A custom HTRflow pipeline step (`steps/`) that substitutes Cantus ground-truth text for the
-recognised transcription when computing word boundaries, so downstream syllable segmentation
-and neume alignment use authoritative text rather than error-prone HTR output.
-See [`steps/README.md`](steps/README.md).
+See [`scripts/README.md`](scripts/README.md) for usage.
 
 ---
 
@@ -113,28 +133,29 @@ See [`steps/README.md`](steps/README.md).
 
 ```
 mothra-text/
-├── data/folios/                    # manuscript folio images (HuggingFace)
-├── experiments/
-│   └── pylaia_baseline/            # zero-shot HTR baselines — see README inside
-├── gui/                            # Pipeline Inspector browser app (→ ddmal.github.io/mothra-text/)
+├── experiments/                    # comparative research (not part of main pipeline)
+│   ├── README.md                   # experiments documentation
+│   ├── run_htrflow.py              # YOLO/RTMDet segmentation runner
+│   ├── run_all.py                  # runs all three models
+│   ├── pipelines/                  # htrflow YAML configs for YOLO and RTMDet
+│   └── pylaia_baseline/            # zero-shot PyLaia HTR baselines
+├── gui/                            # Pipeline Inspector browser app
 │   └── README.md
-├── pipelines/                      # htrflow YAML configs for line-seg models
-├── scripts/
-│   └── build_gt_manifest.py        # CLI: build a Cantus gt_lookup manifest
-├── steps/
-│   ├── column_clustering.py        # column detection + co-linear segment fusion
+├── scripts/                        # utility and conversion scripts
+│   └── README.md
+├── steps/                          # pipeline step implementations
+│   ├── column_clustering.py
 │   ├── ground_truth_word_segmentation.py
 │   ├── gt_manifest.py
-│   ├── kraken_recognition.py       # Kraken HTR step
-│   ├── kraken_segmentation.py      # Kraken BLLA segmentation step
-│   ├── nw_chant_allocator.py       # NW alignment + folio state
-│   └── README.md                   # steps documentation
-├── tests/                          # pytest suite (177 tests)
+│   ├── kraken_recognition.py
+│   ├── kraken_segmentation.py
+│   ├── nw_chant_allocator.py
+│   ├── syllable_segmentation.py
+│   └── README.md
+├── tests/                          # pytest suite (200+ tests)
 ├── page_viewer.py                  # PAGE XML Viewer desktop GUI
-├── run_all.py
-├── run_htrflow.py
-├── run_kraken.py
-└── run_pipeline.py                 # end-to-end pipeline: Kraken BLLA → HTR → NW alloc → GT word seg
+├── run_kraken.py                   # standalone Kraken BLLA runner + visualization
+└── run_pipeline.py                 # end-to-end pipeline
 ```
 
 ---
@@ -142,7 +163,7 @@ mothra-text/
 ## Data
 
 Folio images and model outputs are stored on HuggingFace, not in this repo.
-Pull them locally before running experiments:
+Pull them locally before running:
 
 ```bash
 # Pull folio images → data/folios/
@@ -150,13 +171,10 @@ ddmal-hfsync pull-groundtruth --shared --dir data
 
 # Pull model outputs → outputs/
 ddmal-hfsync pull-runs --project mothra-text --model kraken --dir outputs/kraken_blla
-ddmal-hfsync pull-runs --project mothra-text --model htrflow-yolov9 --dir outputs/htrflow_yolo
-ddmal-hfsync pull-runs --project mothra-text --model htrflow-rtmdet-lines --dir outputs/htrflow_rtmdet
-ddmal-hfsync pull-runs --project mothra-text --model pylaia_baseline --dir outputs/pylaia_baseline
 ```
 
 See [DDMAL/ddmal_hfsync](https://github.com/DDMAL/ddmal_hfsync) for setup instructions
-(`~/.hfconfig` must be configured before these commands will work).
+(`~/.hfconfig` must be configured).
 
 ---
 
@@ -167,63 +185,21 @@ conda create -n line-seg-eval python=3.10 -y
 conda activate line-seg-eval
 
 pip install htrflow kraken biopython volpiano-display-utilities
-
-# OpenMMLab stack for htrflow's RTMDet adapter
-pip install yapf==0.40.1 mmengine --no-build-isolation
-pip install mmcv==2.0.1 --no-build-isolation   # builds from source
-pip install mmdet==3.1.0 mmocr==1.0.1
 ```
 
-> **Apple Silicon note:** `mmcv 2.0.1` compiled against `torch 2.10.0` references
-> `at::mps::MPSStream::commit(bool)`, a symbol removed from torch's MPS backend
-> after 2.0. `run_htrflow.py` works around this at runtime by preloading a stub
-> dylib (`/tmp/libmps_stub.dylib`) before importing mmcv. Build the stub once:
+> **Python environment note:** Always use the full path to the conda Python — pyenv
+> intercepts the bare `python` command and picks the wrong interpreter:
 > ```bash
-> cat > /tmp/mps_stub.cpp << 'EOF'
-> namespace at { namespace mps {
-> class MPSStream { public: void commit(bool); };
-> void MPSStream::commit(bool) {}
-> }}
-> EOF
-> clang++ -dynamiclib -std=c++17 -o /tmp/libmps_stub.dylib /tmp/mps_stub.cpp
+> /Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python run_pipeline.py ...
 > ```
+
+For experiment-specific dependencies (OpenMMLab stack for RTMDet, PyLaia environment),
+see [`experiments/README.md`](experiments/README.md).
 
 ---
 
-## Running
-
-> **Prerequisites:** `data/folios/` must be populated before running with the defaults.
-> Pull it from HuggingFace first — see the [Data](#data) section above.
+## Tests
 
 ```bash
-# Run all three models — reads from data/folios/, writes to outputs/ (both gitignored; pull from HF first)
-python run_all.py
-
-# Use a different folio directory
-python run_all.py --folios /path/to/your/images
-
-# Use a different folio directory and output location
-python run_all.py --folios /path/to/your/images --output /path/to/your/outputs
-```
-
-Output subfolders are created automatically under `--output` (default: `outputs/`):
-- `<output>/htrflow_yolo/`
-- `<output>/htrflow_rtmdet/`
-- `<output>/kraken_blla/`
-
-Already-processed images are skipped on re-runs.
-
-To share results with the lab, push your outputs to HuggingFace when done:
-
-```bash
-ddmal-hfsync push-run --project mothra-text --model <model> --dir outputs/<model_dir> --force
-```
-
-The individual scripts also accept the same flags and can be run separately:
-
-```bash
-python run_htrflow.py --model yolo
-python run_htrflow.py --model rtmdet
-python run_kraken.py
-# all accept --folios and --output
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python -m pytest tests/ -v
 ```

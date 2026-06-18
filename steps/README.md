@@ -94,12 +94,16 @@ folio, improving both reading order and NW word-count allocation.
 
 HTRflow pipeline step for per-line text recognition using a Kraken HTR model.
 
+- **Default model**: `run_pipeline.py` automatically uses the Tridis model
+  (`Tridis_Medieval_EarlyModern.mlmodel`) if it is installed via htrmopo. Install with:
+  `python -m htrmopo get 10.5281/zenodo.7899855`
 - **Stub mode** (`model=None`): logs a WARNING and sets empty text on all line nodes.
   The pipeline still runs to completion, allowing segmentation and JSON export to be
-  tested without a model.
-- **Model mode**: loads any Kraken-compatible model (local `.mlmodel` path or
-  HuggingFace ID via `kraken.lib.models.load_any`). Runs `kraken.rpred.rpred` on each
-  line crop. Recognized text and per-character confidence scores are stored on the node.
+  tested without a model. Trigger explicitly with `--stub-mode`; occurs automatically
+  with a warning if the Tridis model is not installed and no `--recognition-model` is given.
+- **Custom model** (`--recognition-model PATH`): loads any Kraken-compatible model
+  (local `.mlmodel` path). Runs `kraken.rpred.rpred` on each line crop. Recognized text
+  and per-character confidence scores are stored on the node.
 
 Kraken imports are lazy (inside `run()`), so stub mode never requires Kraken to be
 importable.
@@ -172,8 +176,9 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
   Set `force_window=0` to disable entirely.
 - Hard-resets the pointer to the nearest `column_break_777` anchor at the start of
   column 2 (when `column_count=2`).
-- **Stub mode** (when OCR texts are all empty, i.e. no `--recognition-model` was
-  supplied): each line advances to the next anchor of any type instead of running NW.
+- **Stub mode** (when OCR texts are all empty, i.e. `--stub-mode` was given or no
+  recognition model was available): each line advances to the next anchor of any type
+  instead of running NW.
   When no anchor is available (e.g. all chants on the folio lack volpiano), remaining
   words are distributed uniformly across remaining lines — `floor(remaining_words /
   remaining_lines)` per line, with the last line receiving any leftover words.

@@ -73,6 +73,20 @@ export function TopBar({ data, layers, onToggle, onOpenFiles }: Props) {
         </div>
       )}
 
+      {/* Word source legend — only shown when words layer is active */}
+      {data && layers.words && (
+        <div className="flex items-center gap-2.5 text-[10px] text-gray-400 border-l border-gray-600 pl-3">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: "rgb(45,212,191)" }} />
+            GT
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: "rgb(251,113,133)" }} />
+            OCR fallback
+          </span>
+        </div>
+      )}
+
       {/* Open */}
       <button
         onClick={onOpenFiles}

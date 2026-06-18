@@ -209,16 +209,19 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
             );
           })}
 
-        {/* Word rects — label shown only when screen-space box height >= 20px */}
+        {/* Word rects — teal for GT words, rose for OCR fallback */}
         {layers.words &&
           svgState.wordRects.map(({ key, points, word, cx, cy, width, height }) => {
             const fs = Math.max(9, Math.round(height * 0.4));
+            const isGt = word.source === "gt";
+            const color = isGt ? "rgb(45,212,191)" : "rgb(251,113,133)";
+            const fillColor = isGt ? "rgba(45,212,191,0.10)" : "rgba(251,113,133,0.10)";
             return (
               <g key={key}>
                 <polygon
                   points={points}
-                  fill="rgba(45,212,191,0.10)"
-                  stroke="rgb(45,212,191)"
+                  fill={fillColor}
+                  stroke={color}
                   strokeWidth={1}
                 />
                 {word.text && word.text.length * fs * 0.4 <= width && (
@@ -227,7 +230,7 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
                     y={cy - 2}
                     fontSize={fs}
                     fontFamily="ui-monospace, monospace"
-                    fill="rgb(45,212,191)"
+                    fill={color}
                     style={{ userSelect: "none", pointerEvents: "none" }}
                   >
                     {word.text}
