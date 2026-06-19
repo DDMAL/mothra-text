@@ -65,7 +65,7 @@ python -m htrmopo get 10.5281/zenodo.7899855
 ```
 Use `--stub-mode` to skip recognition entirely (pipeline still produces GT word/syllable geometry).
 
-**Multi-folio runs:**
+**Multi-folio runs (manual):**
 ```bash
 # First folio
 python run_pipeline.py --image 006r.jpg --folio 006r --source-id 123672 \
@@ -75,6 +75,36 @@ python run_pipeline.py --image 006r.jpg --folio 006r --source-id 123672 \
 python run_pipeline.py --image 007v.jpg --folio 007v --source-id 123672 \
     --prev-folio-state state_006r.json --export-json ~/Downloads/DDMAL/007v.json
 ```
+
+**Multi-folio runs (automated):** Use `run_chain.py` to chain any number of consecutive
+folios in a single command — intermediate `FolioState` sidecar files are managed
+automatically:
+
+```bash
+python run_chain.py \
+    --images 006r.jpg 007v.jpg 008r.jpg \
+    --folios 006r 007v 008r \
+    --source-id 123672 \
+    --export-json ~/Downloads/DDMAL/006r.json \
+                  ~/Downloads/DDMAL/007v.json \
+                  ~/Downloads/DDMAL/008r.json
+```
+
+| Flag | Description |
+|---|---|
+| `--images PATH [...]` | Ordered folio image paths |
+| `--folios STR [...]` | Folio identifiers matching the CSV (same order as `--images`) |
+| `--export-json PATH [...]` | One output JSON path per folio; parent dirs created automatically |
+| `--folio-states-dir PATH` | Save intermediate `state_{folio}.json` files here for debugging |
+| `--debug-ocr` | Print per-line OCR and NW alignment detail for every folio |
+
+All model and device flags from `run_pipeline.py` (`--segmentation-model`,
+`--recognition-model`, `--device`, `--stub-mode`, `--column-count`,
+`--column-bimodal-threshold`) are forwarded unchanged to every folio run.
+The chain aborts on the first failure to avoid propagating corrupt state.
+
+The manual `--prev-folio-state` / `--folio-state-out` approach above remains
+available for one-off runs or non-consecutive folios.
 
 ---
 
@@ -154,7 +184,8 @@ mothra-text/
 ├── tests/                          # pytest suite (200+ tests)
 ├── page_viewer.py                  # PAGE XML Viewer desktop GUI
 ├── run_kraken.py                   # standalone Kraken BLLA runner + visualization
-└── run_pipeline.py                 # end-to-end pipeline
+├── run_pipeline.py                 # end-to-end pipeline (single folio)
+└── run_chain.py                    # automated multi-folio chaining wrapper
 ```
 
 ---
