@@ -26,6 +26,10 @@ Each word in the JSON carries a `source` field: `"gt"` when the line was assigne
 ground-truth text by the NW allocator, `"fallback"` when it was not (line received no
 Cantus text and word boundaries came from the OCR output instead).
 
+The top-level JSON object carries a `mode` field: `"cantus_aligned"` when the pipeline ran
+with a Cantus CSV or source ID, `"ocr_only"` when it ran without — in that case all words
+will have `"fallback"` source.
+
 ---
 
 ## Generating the pipeline JSON

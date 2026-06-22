@@ -27,14 +27,16 @@ from pathlib import Path
 def _find_tridis_model() -> str | None:
     """Return the local path to the Tridis model, or None if not installed.
 
-    Searches the htrmopo cache directory (platform-appropriate via platformdirs)
-    for the Tridis .mlmodel file. Works on any machine where the model has been
-    installed with htrmopo regardless of the UUID-named subdirectory.
+    Searches the htrmopo cache directory (platform-appropriate via
+    platformdirs) for the Tridis .mlmodel file. Works on any machine
+    where the model has been installed with htrmopo regardless of the
+    UUID-named subdirectory.
     """
     try:
         from platformdirs import user_data_dir
         htrmopo_dir = Path(user_data_dir("htrmopo"))
-        matches = list(htrmopo_dir.glob("*/Tridis_Medieval_EarlyModern.mlmodel"))
+        pat = "*/Tridis_Medieval_EarlyModern.mlmodel"
+        matches = list(htrmopo_dir.glob(pat))
         return str(matches[0]) if matches else None
     except Exception:
         return None
@@ -198,7 +200,7 @@ def _defuse_manifest(fused_manifest, fused_lines):
 
 def run(
     image_path: str,
-    folio: str,
+    folio: str | None = None,
     source_id: int | None = None,
     csv_path: str | None = None,
     segmentation_model: str | None = None,
@@ -210,43 +212,57 @@ def run(
     folio_state_out: str | None = None,
     debug_ocr: bool = False,
     column_count: int | None = None,
+    ocr_only_mode: bool = False,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
     Args:
         image_path: Path to the folio JPEG/PNG/TIFF.
-        folio: Folio string exactly as it appears in the CSV.
+        folio: Folio string exactly as it appears in the CSV.  Required
+            when ``csv_path`` or ``source_id`` is given.  In OCR-only
+            mode (neither given) defaults to the image filename stem.
         source_id: Cantus source ID (fetches from cantusdatabase.org).
+            Omit together with ``csv_path`` to run in OCR-only mode.
         csv_path: Path to a local Cantus-format CSV (alternative to
-            source_id).
+            source_id).  Omit together with ``source_id`` to run in
+            OCR-only mode.
         recognition_model: HuggingFace model ID or local path to a
             Kraken ``.mlmodel`` file.  Pass ``None`` (default) to run
             in stub mode (empty text, pipeline still completes).
         device: Kraken inference device (``"cpu"`` or ``"cuda"``).
         line_offset: Cantus lines to skip before aligning with detected
             nodes.  Use when the image is a crop starting partway
-            through the folio.
+            through the folio.  Ignored in OCR-only mode.
         column_bimodal_threshold: Maximum ratio of the coverage-profile
             valley to the smaller column peak for the valley to be
             treated as a genuine inter-column gutter.  See cluster_columns().
         prev_folio_state: FolioState from the previous folio run.
             When provided, its remaining_words (post-77 continuation)
-            are prepended to the flat text before alignment.
+            are prepended to the flat text before alignment.  Ignored
+            in OCR-only mode.
         folio_state_out: If given, write the folio state JSON to this
             path after allocation (for use as prev_folio_state on the
-            next folio).
+            next folio).  Ignored in OCR-only mode.
         debug_ocr: When True, print per-fused-line OCR text and NW
-            alignment detail to stdout for diagnosis.
+            alignment detail to stdout for diagnosis.  In OCR-only mode
+            prints a startup banner and flags any ignored Cantus args.
         column_count: When 1 or 2, declares the folio column count and
             skips bimodal auto-detection.  Pass the appropriate
             column-specific model via ``segmentation_model``.  ``None``
             (default) preserves existing auto-detection behaviour.
+        ocr_only_mode: When True, skip Cantus data loading and NW
+            allocation entirely.  All lines fall back to OCR text for
+            word and syllable segmentation.  Set automatically by
+            ``main()`` when neither ``--csv`` nor ``--source-id`` is
+            given.
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level
-        nodes and manifest is the node-label → Cantus-text mapping.
+        nodes and manifest is the node-label → Cantus-text mapping
+        (empty dict in OCR-only mode).
     """
     collection = Collection([image_path])
+    folio = folio or Path(image_path).stem
 
     # Model selection: when --column-count is given the caller should pass the
     # appropriate fine-tuned model via --segmentation-model. In future this
@@ -256,7 +272,9 @@ def run(
 
     # Stage 1: Kraken BLLA line segmentation
     logger.info("Stage 1: Kraken line segmentation")
-    collection = KrakenSegmentation(device=device, model=effective_model).run(collection)
+    collection = KrakenSegmentation(
+        device=device, model=effective_model
+    ).run(collection)
     n_lines = sum(1 for _ in collection.active_leaves())
     logger.info("  %d line nodes", n_lines)
 
@@ -283,23 +301,7 @@ def run(
         model=recognition_model, device=device
     ).run(collection)
 
-    # Stage 4: NW chant allocation
-    if csv_path:
-        logger.info(
-            "Stage 4: NW allocation — loading local CSV from %s", csv_path
-        )
-        csv_rows = load_local_csv(csv_path)
-    else:
-        logger.info(
-            "Stage 4: NW allocation — fetching Cantus CSV for source %d",
-            source_id,
-        )
-        csv_rows = fetch_cantus_csv(source_id)
-    flat_text = build_flat_text_and_anchors(
-        csv_rows, folio,
-        line_offset=line_offset,
-        prev_folio_state=prev_folio_state,
-    )
+    # Stage 4: Line fusion + chant allocation (or OCR-only)
     node_ocr = {node.label: (node.text or "") for node in page.children}
     fused_lines = fuse_colinear_segments(list(page.children), split_x)
     left_column_count = sum(1 for f in fused_lines if f.column == 1)
@@ -322,75 +324,117 @@ def run(
         print()
     # --------------------------------------------------------
 
-    alloc_result = allocate_lines(
-        flat_text=flat_text,
-        sorted_labels=fused_sorted_labels,
-        ocr_texts=fused_ocr_texts,
-        column_count=column_count,
-        left_column_count=left_column_count,
-        snap_window=2,
-        force_window=10,  # force within_chant_7 up to ±10 words mid-chant
-        debug=debug_ocr,
-        fused_lines=fused_lines,
-        node_ocr=node_ocr,
-    )
-
-    # --- DEBUG OCR: print per-line NW alignment detail ---
-    if debug_ocr and alloc_result.debug_lines:
-        print("\n=== DEBUG NW ALIGNMENT ===")
-        for entry in alloc_result.debug_lines:
-            print(f"\n-- {entry['label']} --")
-            print(f"  OCR:      {entry['ocr']!r}")
-            print(f"  Assigned: {entry['assigned']!r}")
-            ptr_s = entry['pointer_start']
-            ptr_e = entry['pointer_end']
+    if ocr_only_mode:
+        logger.info("Stage 4: OCR-only — skipping Cantus alignment")
+        if debug_ocr:
             print(
-                f"  Words:    [{ptr_s}..{ptr_e})"
-                f" consumed={entry['consumed']}"
+                "[OCR-only mode] No CSV or source ID"
+                " — Cantus alignment skipped."
             )
-            if entry['best_norm'] is not None:
-                k_pre = entry['best_k_pre_snap']
-                norm = entry['best_norm']
-                print(
-                    f"  NW score: k={k_pre} (pre-snap),"
-                    f" norm={norm:.4f}"
-                )
-            if entry['anchor_word'] is not None:
-                nw_end = entry['pointer_start'] + entry['best_k_pre_snap']
-                diff = abs(nw_end - entry['anchor_word'])
-                print(
-                    f"  Anchor:   word {entry['anchor_word']}"
-                    f" ({entry['anchor_type']})"
-                    f", diff={diff}, snapped={entry['snapped']}"
-                    f", forced={entry['forced']}"
-                )
-            if entry['alignment']:
-                print("  Alignment:")
-                for aln_line in entry['alignment'].splitlines():
-                    print(f"    {aln_line}")
-        print("=== END DEBUG ===\n")
-    # ------------------------------------------------------
+            print(f"[OCR-only mode] Folio label: {folio}")
+            _ignored_flags = [
+                (line_offset != 0, "--line-offset"),
+                (prev_folio_state is not None, "--prev-folio-state"),
+                (folio_state_out is not None, "--folio-state-out"),
+            ]
+            for cond, name in _ignored_flags:
+                if cond:
+                    print(
+                        f"[OCR-only mode] Ignoring {name}"
+                        " (not applicable without Cantus data)"
+                    )
+            print()
+        manifest = {}
+    else:
+        if csv_path:
+            logger.info(
+                "Stage 4: NW allocation — loading local CSV from %s", csv_path
+            )
+            csv_rows = load_local_csv(csv_path)
+        else:
+            logger.info(
+                "Stage 4: NW allocation — fetching Cantus CSV for source %d",
+                source_id,
+            )
+            csv_rows = fetch_cantus_csv(source_id)
+        flat_text = build_flat_text_and_anchors(
+            csv_rows, folio,
+            line_offset=line_offset,
+            prev_folio_state=prev_folio_state,
+        )
 
-    manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
-    for lbl, text in alloc_result.constituent_overrides.items():
-        manifest[lbl] = text
-    for flag in alloc_result.flags:
-        logger.warning(
-            "Validation flag [%s]: %s", flag.flag_type, flag.detail
+        alloc_result = allocate_lines(
+            flat_text=flat_text,
+            sorted_labels=fused_sorted_labels,
+            ocr_texts=fused_ocr_texts,
+            column_count=column_count,
+            left_column_count=left_column_count,
+            snap_window=2,
+            force_window=10,  # force within_chant_7 up to ±10 words mid-chant
+            debug=debug_ocr,
+            fused_lines=fused_lines,
+            node_ocr=node_ocr,
         )
-    logger.info(
-        "  Manifest: %d / %d node labels assigned text",
-        sum(1 for v in manifest.values() if v),
-        len(manifest),
-    )
-    if folio_state_out:
-        state = build_folio_state(flat_text, alloc_result, source_id, folio)
-        write_folio_state(state, folio_state_out)
+
+        # --- DEBUG OCR: print per-line NW alignment detail ---
+        if debug_ocr and alloc_result.debug_lines:
+            print("\n=== DEBUG NW ALIGNMENT ===")
+            for entry in alloc_result.debug_lines:
+                print(f"\n-- {entry['label']} --")
+                print(f"  OCR:      {entry['ocr']!r}")
+                print(f"  Assigned: {entry['assigned']!r}")
+                ptr_s = entry['pointer_start']
+                ptr_e = entry['pointer_end']
+                print(
+                    f"  Words:    [{ptr_s}..{ptr_e})"
+                    f" consumed={entry['consumed']}"
+                )
+                if entry['best_norm'] is not None:
+                    k_pre = entry['best_k_pre_snap']
+                    norm = entry['best_norm']
+                    print(
+                        f"  NW score: k={k_pre} (pre-snap),"
+                        f" norm={norm:.4f}"
+                    )
+                if entry['anchor_word'] is not None:
+                    nw_end = entry['pointer_start'] + entry['best_k_pre_snap']
+                    diff = abs(nw_end - entry['anchor_word'])
+                    print(
+                        f"  Anchor:   word {entry['anchor_word']}"
+                        f" ({entry['anchor_type']})"
+                        f", diff={diff}, snapped={entry['snapped']}"
+                        f", forced={entry['forced']}"
+                    )
+                if entry['alignment']:
+                    print("  Alignment:")
+                    for aln_line in entry['alignment'].splitlines():
+                        print(f"    {aln_line}")
+            print("=== END DEBUG ===\n")
+        # ------------------------------------------------------
+
+        manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
+        for lbl, text in alloc_result.constituent_overrides.items():
+            manifest[lbl] = text
+        for flag in alloc_result.flags:
+            logger.warning(
+                "Validation flag [%s]: %s", flag.flag_type, flag.detail
+            )
         logger.info(
-            "Folio state written to %s (fully_consumed=%s)",
-            folio_state_out,
-            state.fully_consumed,
+            "  Manifest: %d / %d node labels assigned text",
+            sum(1 for v in manifest.values() if v),
+            len(manifest),
         )
+        if folio_state_out:
+            state = build_folio_state(
+                flat_text, alloc_result, source_id, folio
+            )
+            write_folio_state(state, folio_state_out)
+            logger.info(
+                "Folio state written to %s (fully_consumed=%s)",
+                folio_state_out,
+                state.fully_consumed,
+            )
+
     gt_lookup = make_manifest_lookup(manifest)
 
     # Remaining steps — add new steps to this list as they are implemented:
@@ -409,8 +453,10 @@ def _build_pipeline_payload(
     collection: Collection,
     image_path: str,
     manifest: dict[str, str],
+    folio: str | None = None,
+    mode: str = "cantus_aligned",
 ) -> dict:
-    """Build the GUI-compatible JSON payload dict from a completed pipeline run."""
+    """Build the GUI-compatible JSON payload dict from a pipeline run."""
     page = next(iter(collection))
     lines = []
     for line_node in page.children:
@@ -431,7 +477,9 @@ def _build_pipeline_payload(
                 "label": word_node.label,
                 "text": word_node.text or "",
                 "bbox": [wbbox.xmin, wbbox.ymin, wbbox.xmax, wbbox.ymax],
-                "source": "gt" if manifest.get(line_node.label) else "fallback",
+                "source": (
+                    "gt" if manifest.get(line_node.label) else "fallback"
+                ),
                 "syllables": syllables,
             })
         lines.append({
@@ -444,7 +492,8 @@ def _build_pipeline_payload(
 
     img = page.image
     return {
-        "folio": Path(image_path).stem,
+        "folio": folio or Path(image_path).stem,
+        "mode": mode,
         "image_width": img.shape[1],
         "image_height": img.shape[0],
         "lines": lines,
@@ -465,14 +514,19 @@ def export_json(
 
 
 def _write_mei_json(payload: dict, out_path: str) -> None:
-    """Convert a pipeline payload dict to MEI Text Alignment JSON and write it."""
+    """Convert a pipeline payload dict to MEI Text Alignment JSON and
+    write it.
+    """
     lines = payload.get("lines", [])
     y_centers = sorted(
         (line["bbox"][1] + line["bbox"][3]) / 2
         for line in lines
         if "bbox" in line
     )
-    diffs = [y_centers[i + 1] - y_centers[i] for i in range(len(y_centers) - 1)]
+    diffs = [
+        y_centers[i + 1] - y_centers[i]
+        for i in range(len(y_centers) - 1)
+    ]
     med = statistics.quantiles(diffs, n=4)[2] if len(diffs) >= 2 else 0.0
 
     syl_boxes = []
@@ -493,7 +547,10 @@ def _write_mei_json(payload: dict, out_path: str) -> None:
     Path(out_path).expanduser().write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    logger.info("Exported MEI input JSON to %s (%d syllables)", out_path, len(syl_boxes))
+    logger.info(
+        "Exported MEI input JSON to %s (%d syllables)",
+        out_path, len(syl_boxes),
+    )
 
 
 def _summarise(collection: Collection) -> None:
@@ -514,14 +571,23 @@ def main() -> None:
     )
     parser.add_argument("--image", required=True, metavar="PATH",
                         help="Path to the folio image.")
-    parser.add_argument("--folio", required=True, metavar="STR",
-                        help="Folio string as it appears in the CSV.")
-    csv_group = parser.add_mutually_exclusive_group(required=True)
-    csv_group.add_argument("--source-id", type=int, metavar="INT",
-                           help="Cantus source ID (fetches CSV from "
-                                "cantusdatabase.org).")
-    csv_group.add_argument("--csv", metavar="PATH",
-                           help="Path to a local Cantus-format CSV file.")
+    parser.add_argument(
+        "--folio", default=None, metavar="STR",
+        help="Folio string as it appears in the CSV. Required when "
+             "--csv or --source-id is given. In OCR-only mode (neither "
+             "given) defaults to the image filename stem.",
+    )
+    csv_group = parser.add_mutually_exclusive_group(required=False)
+    csv_group.add_argument(
+        "--source-id", type=int, metavar="INT",
+        help="Cantus source ID (fetches CSV from cantusdatabase.org). "
+             "Omit together with --csv to run in OCR-only mode.",
+    )
+    csv_group.add_argument(
+        "--csv", metavar="PATH",
+        help="Path to a local Cantus-format CSV file. "
+             "Omit together with --source-id to run in OCR-only mode.",
+    )
     parser.add_argument("--segmentation-model", default=None,
                         metavar="PATH",
                         help="Local path to a custom Kraken BLLA segmentation "
@@ -535,17 +601,26 @@ def main() -> None:
              "fine-tuned model via --segmentation-model. Omit to use "
              "existing auto-detection behaviour.",
     )
-    parser.add_argument("--recognition-model", default=_DEFAULT_RECOGNITION_MODEL,
-                        metavar="PATH",
-                        help="Local path to a Kraken .mlmodel recognition model. "
-                             "Defaults to the Tridis model if installed via htrmopo "
-                             "(install: python -m htrmopo get 10.5281/zenodo.7899855). "
-                             "Use --stub-mode to skip recognition entirely.")
-    parser.add_argument("--stub-mode", action="store_true", default=False,
-                        help="Skip text recognition. All lines get empty text; "
-                             "the pipeline still runs and produces word/syllable "
-                             "geometry from ground truth. Takes precedence over "
-                             "--recognition-model.")
+    parser.add_argument(
+        "--recognition-model",
+        default=_DEFAULT_RECOGNITION_MODEL,
+        metavar="PATH",
+        help=(
+            "Local path to a Kraken .mlmodel recognition model. "
+            "Defaults to the Tridis model if installed via htrmopo "
+            "(install: python -m htrmopo get 10.5281/zenodo.7899855). "
+            "Use --stub-mode to skip recognition entirely."
+        ),
+    )
+    parser.add_argument(
+        "--stub-mode", action="store_true", default=False,
+        help=(
+            "Skip text recognition. All lines get empty text; "
+            "the pipeline still runs and produces word/syllable "
+            "geometry from ground truth. Takes precedence over "
+            "--recognition-model."
+        ),
+    )
     parser.add_argument("--device", default="cpu",
                         help="Kraken inference device (default: cpu).")
     parser.add_argument(
@@ -554,9 +629,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--mei-json", metavar="PATH", default=None,
-        help="If given, write MEI encoding Text Alignment JSON to PATH. "
-             "Produces the same output as running scripts/convert_to_mei_input.py "
-             "on the --export-json file.",
+        help=(
+            "If given, write MEI encoding Text Alignment JSON to PATH. "
+            "Produces the same output as running "
+            "scripts/convert_to_mei_input.py on the --export-json file."
+        ),
     )
     parser.add_argument(
         "--line-offset", type=int, default=0, metavar="N",
@@ -588,9 +665,31 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    ocr_only_mode = not args.csv and not args.source_id
+    if not ocr_only_mode and not args.folio:
+        parser.error(
+            "--folio is required when --csv or --source-id is given"
+        )
+
     image_path = str(Path(args.image).expanduser().resolve())
     if not Path(image_path).exists():
         parser.error(f"Image not found: {image_path}")
+
+    if ocr_only_mode:
+        logger.info(
+            "OCR-only mode: no --csv or --source-id given; "
+            "Cantus alignment will be skipped"
+        )
+        _cantus_flags = [
+            (args.line_offset != 0, "--line-offset"),
+            (args.prev_folio_state, "--prev-folio-state"),
+            (args.folio_state_out, "--folio-state-out"),
+        ]
+        for val, name in _cantus_flags:
+            if val:
+                logger.warning(
+                    "%s is ignored in OCR-only mode", name
+                )
 
     if args.stub_mode:
         recognition_model = None
@@ -598,7 +697,8 @@ def main() -> None:
         recognition_model = args.recognition_model
         if recognition_model is None:
             print(
-                "Warning: Tridis recognition model not found. Running in stub mode.\n"
+                "Warning: Tridis recognition model not found."
+                " Running in stub mode.\n"
                 "Install with: python -m htrmopo get 10.5281/zenodo.7899855",
                 file=sys.stderr,
             )
@@ -623,11 +723,17 @@ def main() -> None:
         folio_state_out=args.folio_state_out,
         debug_ocr=args.debug_ocr,
         column_count=args.column_count,
+        ocr_only_mode=ocr_only_mode,
     )
     _summarise(collection)
 
     if args.export_json or args.mei_json:
-        payload = _build_pipeline_payload(collection, image_path, manifest)
+        resolved_folio = args.folio or Path(image_path).stem
+        _mode = "ocr_only" if ocr_only_mode else "cantus_aligned"
+        payload = _build_pipeline_payload(
+            collection, image_path, manifest,
+            folio=resolved_folio, mode=_mode,
+        )
 
         if args.export_json:
             with open(args.export_json, "w", encoding="utf-8") as f:

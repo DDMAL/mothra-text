@@ -2,7 +2,7 @@
 
 Pipeline and tools for HTR and HTR-OMR alignment on medieval chant manuscripts.
 The primary artifact is `run_pipeline.py`, which runs a folio image through line segmentation,
-Cantus text alignment, and word/syllable geometry generation. Two visualization tools
+optional Cantus text alignment, and word/syllable geometry generation. Two visualization tools
 (Pipeline Inspector GUI and PAGE XML Viewer) let you inspect the output.
 
 For comparative segmentation experiments and PyLaia baselines, see [`experiments/README.md`](experiments/README.md).
@@ -21,13 +21,15 @@ For comparative segmentation experiments and PyLaia baselines, see [`experiments
    text line (≥50% y-extent overlap) into logical lines, correcting BLLA over-segmentation
    on chant manuscripts with neume notation
 4. **Kraken HTR** — text recognition per logical line
-5. **NW chant allocator** — align Cantus CSV text to detected lines via Needleman-Wunsch,
-   using volpiano break markers as alignment anchors; supports folio-to-folio continuation
-   via JSON sidecar (`--folio-state-out`); in no-volpiano mode, automatically locates
-   where this folio's first chant begins via NW matching and assigns pre-start lines to
-   the previous folio's continuation (see `locate_folio_start` and `pre_start_suffix_align`
-   in [`steps/README.md`](steps/README.md))
-6. **GT word segmentation** — distribute Cantus words across each line's pixel extent
+5. **NW chant allocator** *(skipped in OCR-only mode)* — align Cantus CSV text to detected
+   lines via Needleman-Wunsch, using volpiano break markers as alignment anchors; supports
+   folio-to-folio continuation via JSON sidecar (`--folio-state-out`); in no-volpiano mode,
+   automatically locates where this folio's first chant begins via NW matching and assigns
+   pre-start lines to the previous folio's continuation (see `locate_folio_start` and
+   `pre_start_suffix_align` in [`steps/README.md`](steps/README.md))
+6. **Word segmentation** — distribute ground-truth Cantus words across each line's pixel
+   extent; falls back to OCR word splitting when no Cantus text is available (OCR-only mode
+   or lines with no match)
 7. **Syllable segmentation** — subdivide each word node into character-proportional
    syllable regions using Latin syllabification from `volpiano-display-utilities`
 
@@ -45,18 +47,32 @@ python run_pipeline.py \
 
 | Flag | Description |
 |---|---|
-| `--source-id INT` | Cantus source ID (fetched from cantusdatabase.org) |
-| `--csv PATH` | Local Cantus-format CSV file (alternative to `--source-id`) |
+| `--folio STR` | Folio identifier (e.g. `"006r"`). Required when `--csv` or `--source-id` is given; defaults to the image filename stem in OCR-only mode. |
+| `--source-id INT` | Cantus source ID (fetched from cantusdatabase.org). Omit with `--csv` to enter OCR-only mode. |
+| `--csv PATH` | Local Cantus-format CSV file. Omit with `--source-id` to enter OCR-only mode. |
 | `--segmentation-model PATH` | Custom Kraken BLLA model (`.mlmodel` or `.safetensors`); omit for Kraken built-in |
 | `--column-count {1,2}` | Declare column count; skips bimodal auto-detection |
 | `--recognition-model PATH` | Kraken HTR model; defaults to Tridis if installed |
 | `--stub-mode` | Skip text recognition; pipeline still runs using ground-truth text |
-| `--line-offset N` | Skip first N volpiano line-break markers (for cropped images) |
-| `--prev-folio-state PATH` | JSON sidecar from the previous folio run (post-77 continuation words) |
-| `--folio-state-out PATH` | Write folio state JSON for the next folio run |
+| `--line-offset N` | Skip first N volpiano line-break markers (for cropped images; Cantus mode only) |
+| `--prev-folio-state PATH` | JSON sidecar from the previous folio run (post-77 continuation words; Cantus mode only) |
+| `--folio-state-out PATH` | Write folio state JSON for the next folio run (Cantus mode only) |
 | `--export-json PATH` | Write output JSON for the Pipeline Inspector GUI |
 | `--mei-json PATH` | Write MEI Text Alignment JSON (flat `syl_boxes` format) |
-| `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail |
+| `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail; in OCR-only mode also prints a startup banner and lists any ignored flags |
+
+**OCR-only mode:** When neither `--csv` nor `--source-id` is given, the pipeline skips
+Cantus data loading and NW alignment entirely. Steps 1–4 run normally; word boundaries come
+from OCR word splitting and syllables are Latin-syllabified from the OCR text. The exported
+JSON will contain `"mode": "ocr_only"` instead of `"cantus_aligned"`. Flags `--line-offset`,
+`--prev-folio-state`, and `--folio-state-out` are ignored with a warning.
+
+```bash
+# OCR-only (no Cantus data needed)
+python run_pipeline.py \
+    --image path/to/folio.jpg \
+    --export-json ~/Downloads/DDMAL/folio.json
+```
 
 **Recognition model:** The Tridis model (`Tridis_Medieval_EarlyModern.mlmodel`) is used by
 default if installed via htrmopo. To install:
