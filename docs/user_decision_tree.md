@@ -1,0 +1,94 @@
+# Mothra-Text: User Decision Tree
+
+This document describes the full set of choices a user makes when running mothra-text through the GUI. It maps directly to the CLI flags in `run_pipeline.py`, with some flags stripped (not useful to end clients) and others demoted to an **Advanced** panel.
+
+---
+
+## Flag mapping: GUI placement vs CLI
+
+| CLI flag | GUI placement | Default |
+|---|---|---|
+| `--image` | Main — required upload | — |
+| `--source-id` | Main (Cantus-aligned mode only) | — |
+| `--folio` | Main (Cantus-aligned mode only) | — |
+| `--column-count` | Main | Auto-detect |
+| `--segmentation-model` | Main | Kraken built-in BLLA |
+| `--recognition-model` | Main | Tridis Medieval/EarlyModern (auto-detected) |
+| `--csv` | **Stripped** — not useful to end client | — |
+| `--debug-ocr` | **Stripped** — internal only | — |
+| `--stub-mode` | Advanced | off |
+| `--device` | Advanced | cpu |
+| `--line-offset` | Advanced | 0 |
+| `--column-bimodal-threshold` | Advanced | 0.5 |
+| `--prev-folio-state` | Advanced | — |
+| `--folio-state-out` | Auto-managed by pipeline | — |
+| `--export-json` | Output panel — always on in GUI | — |
+| `--mei-json` | Output panel — optional | — |
+
+---
+
+## Decision tree
+
+```mermaid
+flowchart TD
+    START([User opens Mothra GUI]) --> UPLOAD[1. Upload folio image\n.jpg / .png / .tiff]
+    UPLOAD --> MODE{2. Alignment mode?}
+
+    MODE -->|OCR-only\nno Cantus text| COL_COUNT
+    MODE -->|Cantus-aligned\nNW text matching| CANTUS_ID
+
+    CANTUS_ID[3a. Enter Cantus Source ID\ne.g. 601861] --> FOLIO_ID
+    FOLIO_ID[3b. Enter folio identifier\ne.g. '005r'] --> COL_COUNT
+
+    COL_COUNT{4. Column count?}
+    COL_COUNT -->|Auto-detect default| SEG_MODEL
+    COL_COUNT -->|Force 1 column| SEG_MODEL
+    COL_COUNT -->|Force 2 columns| SEG_MODEL
+
+    SEG_MODEL{5. Segmentation model?}
+    SEG_MODEL -->|Default Kraken BLLA| OCR_MODEL
+    SEG_MODEL -->|Upload custom\n.mlmodel or .safetensors| OCR_MODEL
+
+    OCR_MODEL{6. OCR / Recognition model?}
+    OCR_MODEL -->|Tridis Medieval/EarlyModern\nauto-detected default| ADV_GATE
+    OCR_MODEL -->|Custom model\nHuggingFace ID or file| ADV_GATE
+
+    ADV_GATE{7. Advanced options\nneeded?}
+    ADV_GATE -->|No, use defaults| OUTPUT
+    ADV_GATE -->|Yes, expand| ADV_OPTIONS
+
+    ADV_OPTIONS["Skip OCR — stub mode\nLine offset — skip first N Cantus lines\nColumn sensitivity — bimodal threshold slider 0–1\nPrevious folio state — JSON sidecar for chaining\nDevice — cpu / gpu"]
+    ADV_OPTIONS --> OUTPUT
+
+    OUTPUT{8. Output format?}
+    OUTPUT -->|Pipeline JSON\nGUI overlay| RUN
+    OUTPUT -->|MEI JSON\ntext alignment| RUN
+    OUTPUT -->|Both| RUN
+
+    RUN([▶ Run Pipeline])
+
+    RUN --> S1[Stage 1 · BLLA Line Segmentation]
+    S1 --> S2[Stage 2 · Column Clustering + Reading Order]
+    S2 --> S3[Stage 3 · HTR Text Recognition]
+    S3 --> S4{Cantus-aligned?}
+    S4 -->|Yes| S4A[Stage 4 · NW Chant Allocation\nFetch Cantus CSV · NW alignment · volpiano anchors]
+    S4 -->|No| S5
+    S4A --> S5[Stage 5 · Word Segmentation\nGT word count or OCR fallback]
+    S5 --> S6[Stage 6 · Syllable Segmentation\nLatin syllabification]
+    S6 --> EXPORT[Export JSON]
+    EXPORT --> GUI([View in Pipeline Inspector GUI\nToggle: lines · words · syllables\nTeal = GT · Rose = fallback])
+```
+
+---
+
+## Notes
+
+**Column count auto-detect** uses a bimodal coverage-profile histogram of the horizontal extent of all detected line polygons. The algorithm looks for a valley (gap between two columns) in the inner 20–80% of the text region. The Advanced sensitivity slider controls how deep that valley must be relative to the surrounding peaks — lower values require a deeper, cleaner gap.
+
+**Force 2 columns** still runs the bimodal algorithm to locate the actual split position; it only skips the decision of whether to split.
+
+**Custom segmentation models** accept Kraken `.mlmodel` (CoreML) or `.safetensors` format. The current recommended model is Gen Model 1 (`best_0.5278.safetensors`), which produces clean logical-line segmentation. When a column-count-specific fine-tuned model is available, pass it alongside `--column-count`.
+
+**Skip OCR (stub mode)** still runs segmentation and produces word/syllable geometry — it just leaves text empty. Useful for geometry-only workflows or when no HTR model is available.
+
+**Multi-folio chaining** via previous folio state handles chants that cross a page break. The pipeline automatically infers continuation from the Cantus CSV when possible; the explicit sidecar JSON is only needed when chaining across separate pipeline runs.
