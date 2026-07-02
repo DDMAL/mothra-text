@@ -35,7 +35,44 @@ python experiments/run_all.py
 python experiments/run_all.py --folios /path/to/images --output /path/to/outputs
 ```
 
-Outputs go to `outputs/htrflow_yolo/`, `outputs/htrflow_rtmdet/`, and `outputs/kraken_blla/` — visualized PNGs showing line polygon overlays on the original folios.
+Outputs go to `outputs/htrflow_yolo/`, `outputs/htrflow_rtmdet/`, and `outputs/kraken_blla/`. Each folio produces two files per model:
+
+- **`{stem}_{model}.jpg`** — visualization with line polygon overlays on the original folio
+- **`{stem}_{model}.json`** — segmentation data in the following schema:
+
+```json
+{
+  "folio": "stem",
+  "source": "relative/path/to/image",
+  "image_width": 1234,
+  "image_height": 5678,
+  "model_name": "yolov9_lines",
+  "run_date": "2026-07-02T12:00:00+00:00",
+  "lines": [
+    {"id": 0, "boundary": [[x, y], ...], "baseline": null},
+    ...
+  ]
+}
+```
+
+`baseline` is always `null` for YOLO and RTMDet (neither model predicts baselines). Kraken BLLA (`run_kraken.py`) uses the same schema and populates `baseline` when detected.
+
+### HuggingFace output structure
+
+Outputs are stored in `DDMAL-lab/mothra-text-outputs` under per-model folders, each split into `segmentation/` (JSON) and `visualization/` (JPG) subfolders:
+
+```
+mothra-text-outputs/
+├── kraken/
+│   ├── segmentation/{stem}_kraken.json
+│   └── visualization/{stem}_kraken.jpg
+├── htrflow-yolov9/
+│   ├── segmentation/{stem}_yolo.json
+│   └── visualization/{stem}_yolo.jpg
+└── htrflow-rtmdet-lines/
+    ├── segmentation/{stem}_rtmdet.json
+    └── visualization/{stem}_rtmdet.jpg
+```
 
 ### htrflow YAML configs
 
@@ -51,6 +88,8 @@ pip install yapf mmengine "mmcv==2.0.1" mmdet mmocr
 ```
 
 **Apple Silicon workaround:** `mmcv 2.0.1` with torch 2.x on Apple Silicon hits a missing `MPSStream::commit()` symbol. See the workaround in `run_htrflow.py` (`_prepare_rtmdet()`): a stub dylib is preloaded to satisfy the linker before the mmcv C extension loads.
+
+**Known broken environment (torch ≥ 2.6.0):** torch 2.6.0 removed `c10::TensorImpl::decref_pyobject()` from libc10, which the prebuilt mmcv 2.0.x binary depends on. mmdet 3.x simultaneously caps mmcv at < 2.2.0, and mmcv 2.2.0 is the first version compiled without that symbol. Until a newer mmdet accepting mmcv ≥ 2.2.0 is released, RTMDet cannot run in an environment with torch ≥ 2.6.0. YOLO and Kraken are unaffected.
 
 ---
 

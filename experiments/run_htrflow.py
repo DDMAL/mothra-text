@@ -1,12 +1,15 @@
 """
 Run htrflow YOLO and RTMDet line segmentation models against folio images
-and save visualised outputs (line polygons drawn on originals) to outputs/.
+and save visualised outputs (line polygons drawn on originals) and
+segmentation JSON files to outputs/.
 """
 
 import argparse
 import glob
+import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import cv2
 import numpy as np
@@ -70,6 +73,44 @@ def draw_segments(image, result, colour):
     return out
 
 
+def _poly_to_boundary(poly):
+    """Convert an htrflow polygon to a plain [[x, y], ...] list."""
+    arr = np.asarray(poly)
+    if arr.dtype == object:
+        # List of Point-like objects with .x / .y attributes
+        return [[float(pt.x), float(pt.y)] for pt in poly]
+    if arr.ndim == 3 and arr.shape[1] == 1:
+        arr = arr.reshape(-1, 2)
+    return arr.tolist()
+
+
+def _result_to_lines(result):
+    """Convert an htrflow Result to the standard segmentation lines list."""
+    polygons = result.polygons if result.polygons is not None else []
+    masks = result.local_mask if result.local_mask is not None else []
+    lines = []
+    for i, _ in enumerate(result.segments):
+        poly = polygons[i] if i < len(polygons) else None
+        mask = masks[i] if i < len(masks) else None
+        if poly is not None:
+            boundary = _poly_to_boundary(poly)
+        elif mask is not None:
+            contours, _ = cv2.findContours(
+                mask.astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            if contours:
+                c = max(contours, key=cv2.contourArea)
+                boundary = c.reshape(-1, 2).tolist()
+            else:
+                boundary = None
+        else:
+            boundary = None
+        lines.append({"id": i, "boundary": boundary, "baseline": None})
+    return lines
+
+
 def run_yolo(images, out_dir):
     from htrflow.models.ultralytics.yolo import YOLO
 
@@ -85,7 +126,8 @@ def run_yolo(images, out_dir):
     for path, img in images:
         stem = os.path.splitext(os.path.basename(path))[0]
         out_path = os.path.join(out_dir, f"{stem}_yolo.jpg")
-        if os.path.exists(out_path):
+        json_path = os.path.join(out_dir, f"{stem}_yolo.json")
+        if os.path.exists(out_path) and os.path.exists(json_path):
             print(f"  {stem} ... skipped (output exists)")
             continue
         print(f"  {stem} ...", end=" ", flush=True)
@@ -96,7 +138,22 @@ def run_yolo(images, out_dir):
         n = len(result.segments)
         annotated = draw_segments(img, result, YOLO_COLOUR)
 
-        cv2.imwrite(out_path, annotated)
+        if not os.path.exists(out_path):
+            cv2.imwrite(out_path, annotated)
+
+        h, w = img.shape[:2]
+        seg_data = {
+            "folio": stem,
+            "source": os.path.relpath(path, os.path.dirname(out_dir)),
+            "image_width": w,
+            "image_height": h,
+            "model_name": "yolov9_lines",
+            "run_date": datetime.now(timezone.utc).isoformat(),
+            "lines": _result_to_lines(result),
+        }
+        with open(json_path, "w") as f:
+            json.dump(seg_data, f)
+
         print(f"{n} lines  →  {os.path.relpath(out_path)}")
 
     print("YOLO done.")
@@ -141,7 +198,8 @@ def run_rtmdet(images, out_dir):
     for path, img in images:
         stem = os.path.splitext(os.path.basename(path))[0]
         out_path = os.path.join(out_dir, f"{stem}_rtmdet.jpg")
-        if os.path.exists(out_path):
+        json_path = os.path.join(out_dir, f"{stem}_rtmdet.json")
+        if os.path.exists(out_path) and os.path.exists(json_path):
             print(f"  {stem} ... skipped (output exists)")
             continue
         print(f"  {stem} ...", end=" ", flush=True)
@@ -152,7 +210,22 @@ def run_rtmdet(images, out_dir):
         n = len(result.segments)
         annotated = draw_segments(img, result, RTMDET_COLOUR)
 
-        cv2.imwrite(out_path, annotated)
+        if not os.path.exists(out_path):
+            cv2.imwrite(out_path, annotated)
+
+        h, w = img.shape[:2]
+        seg_data = {
+            "folio": stem,
+            "source": os.path.relpath(path, os.path.dirname(out_dir)),
+            "image_width": w,
+            "image_height": h,
+            "model_name": "rtmdet_lines",
+            "run_date": datetime.now(timezone.utc).isoformat(),
+            "lines": _result_to_lines(result),
+        }
+        with open(json_path, "w") as f:
+            json.dump(seg_data, f)
+
         print(f"{n} lines  →  {os.path.relpath(out_path)}")
 
     print("RTMDet done.")
