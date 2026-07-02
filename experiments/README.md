@@ -84,12 +84,17 @@ The full OpenMMLab stack is required for RTMDet:
 
 ```bash
 conda activate line-seg-eval
-pip install yapf mmengine "mmcv==2.0.1" mmdet mmocr
+pip install yapf mmengine "mmcv==2.0.1" --no-build-isolation
+pip install "mmdet==3.1.0" mmocr
 ```
+
+`--no-build-isolation` is required for mmcv 2.0.1 because its build script uses `pkg_resources`, which is absent in the isolated build environment created by newer pip/setuptools.
+
+**mmdet version pin:** mmdet ≥ 3.2.0 renamed `return_datasample` → `return_datasamples` in `DetInferencer`, breaking htrflow's RTMDet adapter. Pin to `mmdet==3.1.0`.
 
 **Apple Silicon workaround:** `mmcv 2.0.1` with torch 2.x on Apple Silicon hits a missing `MPSStream::commit()` symbol. See the workaround in `run_htrflow.py` (`_prepare_rtmdet()`): a stub dylib is preloaded to satisfy the linker before the mmcv C extension loads.
 
-**Known broken environment (torch ≥ 2.6.0):** torch 2.6.0 removed `c10::TensorImpl::decref_pyobject()` from libc10, which the prebuilt mmcv 2.0.x binary depends on. mmdet 3.x simultaneously caps mmcv at < 2.2.0, and mmcv 2.2.0 is the first version compiled without that symbol. Until a newer mmdet accepting mmcv ≥ 2.2.0 is released, RTMDet cannot run in an environment with torch ≥ 2.6.0. YOLO and Kraken are unaffected.
+**mmcv source-build warning:** Building mmcv from source against torch ≥ 2.6.0 headers produces a binary that references `c10::TensorImpl::decref_pyobject()`, a symbol removed from `libc10.dylib`. Use the prebuilt-equivalent `mmcv==2.0.1` (via `--no-build-isolation`) instead of building newer mmcv from source.
 
 ---
 
