@@ -32,6 +32,46 @@ One `.xml` is written per `.json`; failures are logged and the batch continues.
 
 ---
 
+## visualize_mothra.py
+
+Overlays mothra object detection annotations on a folio image for visual inspection.
+
+```
+python scripts/visualize_mothra.py JSON_PATH IMAGE_PATH OUTPUT_PATH
+```
+
+Draws classId-1 (text) bboxes in green, classId-2 (music) in blue, and classId-3
+(staves) in red. Saves the annotated image to `OUTPUT_PATH` and prints per-class counts.
+
+**Example**
+
+```
+python scripts/visualize_mothra.py \
+    ~/Downloads/DDMAL/mothra-text-layer/JSONs/Antiphonal_12v_hfngl.json \
+    ~/Downloads/DDMAL/mothra-text-layer/images/Antiphonal_12v_hfngl.jpg \
+    ~/Downloads/DDMAL/mothra_viz_12v.jpg
+```
+
+---
+
+## compare_runs.py
+
+Reads two or more pipeline export JSONs and prints a comparison table of line counts
+and word-source statistics (GT vs. fallback). Useful for evaluating the effect of
+mothra integration approaches against the baseline.
+
+```
+python scripts/compare_runs.py \
+    --label baseline ~/Downloads/DDMAL/baseline_12v.json \
+    --label masked   ~/Downloads/DDMAL/mothra_masked_12v.json \
+    --label union    ~/Downloads/DDMAL/mothra_union_12v.json \
+    --output ~/Downloads/DDMAL/mothra_comparison_report_YYYY-MM-DD.txt
+```
+
+The `--output` file is never overwritten; choose a new name each run.
+
+---
+
 ## convert_to_mei_input.py
 
 Converts a mothra-text `--export-json` output file to the **Text Alignment JSON** format

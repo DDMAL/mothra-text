@@ -124,6 +124,32 @@ available for one-off runs or non-consecutive folios.
 
 ---
 
+### 1b. Mothra text-detection integration (experimental)
+
+`run_pipeline_mothra.py` masks the folio image to mothra object-detection output
+(classId-1 text bboxes) before passing it to Kraken BLLA. This reduces noise from
+staves, neumes, and non-chant regions. `run_pipeline.py` is **not modified**; all new
+code is in new files and can be deleted to revert.
+
+Use `--padding` (default 25px) to control how much each text bbox is expanded to help
+Kraken form full lines.
+
+```bash
+python run_pipeline_mothra.py \
+    --image path/to/folio.jpg \
+    --folio "012v" \
+    --source-id 599679 \
+    --mothra-json path/to/folio.json \
+    --export-json ~/Downloads/DDMAL/mothra_masked_12v.json
+```
+
+The `--approach union` mode is deprecated and should not be used.
+
+Compare results with `scripts/compare_runs.py`. Load all output JSONs into the
+Pipeline Inspector GUI for visual comparison.
+
+---
+
 ### 2. Pipeline Inspector GUI
 
 A browser-based viewer for inspecting pipeline output — folio image overlaid with
