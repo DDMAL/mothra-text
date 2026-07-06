@@ -1,5 +1,25 @@
 # Scripts
 
+## run_mothra_inference.py
+
+Runs the DDMAL-lab YOLOv11 mothra models on folio images to produce annotation JSONs
+compatible with `run_pipeline_mothra.py`. Downloads `text_music_detector_fulldata.pt`
+and `stave_detector_fulldata.pt` from `DDMAL-lab/mothra-yolov11-checkpoints` on first
+run (cached by `huggingface_hub`). Requires HF token at `~/.cache/huggingface/token`.
+
+Output schema matches the mothra Annotator export format (classId 1=text, 2=music,
+3=staves; bbox in absolute pixels `[x, y, w, h]`).
+
+```bash
+python scripts/run_mothra_inference.py \
+    --images path/to/folio1.jpg path/to/folio2.jpg \
+    --out-dir ~/Downloads/DDMAL/mothra-text-layer/JSONs/Uncorrected/
+```
+
+Use `--conf` to adjust the YOLO confidence threshold (default 0.25).
+
+---
+
 ## mothra_to_page.py
 
 Converts Mothra Annotator JSON exports to PAGE XML (2019-07-15) for Kraken BLLA training.
