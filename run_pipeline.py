@@ -21,6 +21,7 @@ import json
 import logging
 import statistics
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -663,6 +664,17 @@ def main() -> None:
         help="Print per-fused-line OCR text and NW alignment detail to "
              "stdout for diagnosing misalignment.",
     )
+    parser.add_argument(
+        "--mothra-json", default=None, metavar="PATH",
+        help="Path to a mothra annotation JSON for this folio. When provided, "
+             "blacks out non-text image regions before line segmentation. "
+             "Omit to skip masking (pipeline behaviour unchanged).",
+    )
+    parser.add_argument(
+        "--padding", type=int, default=15, metavar="PX",
+        help="Pixels added around each text bbox when masking (default 15). "
+             "Only used when --mothra-json is given.",
+    )
     args = parser.parse_args()
 
     ocr_only_mode = not args.csv and not args.source_id
@@ -674,6 +686,25 @@ def main() -> None:
     image_path = str(Path(args.image).expanduser().resolve())
     if not Path(image_path).exists():
         parser.error(f"Image not found: {image_path}")
+
+    _mothra_tmp: str | None = None
+    if args.mothra_json:
+        from PIL import Image as _PILImage
+        from steps.mothra_mask import MothraImageMask as _MothraImageMask
+        mothra_json_path = str(Path(args.mothra_json).expanduser().resolve())
+        img = _PILImage.open(image_path).convert("RGB")
+        masker = _MothraImageMask(mothra_json_path, padding_px=args.padding)
+        masked_img = masker.apply(img)
+        logger.info(
+            "Applied mothra mask: %d text bboxes, padding=%dpx",
+            len(masker._bboxes), args.padding,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
+            masked_img.save(_tmp.name)
+            _mothra_tmp = _tmp.name
+        image_path = _mothra_tmp
+    else:
+        logger.info("No --mothra-json provided; running without text-region masking.")
 
     if ocr_only_mode:
         logger.info(
@@ -709,39 +740,44 @@ def main() -> None:
         else None
     )
 
-    collection, manifest = run(
-        image_path=image_path,
-        folio=args.folio,
-        source_id=args.source_id,
-        csv_path=args.csv,
-        segmentation_model=args.segmentation_model,
-        recognition_model=recognition_model,
-        device=args.device,
-        line_offset=args.line_offset,
-        column_bimodal_threshold=args.column_bimodal_threshold,
-        prev_folio_state=prev_state,
-        folio_state_out=args.folio_state_out,
-        debug_ocr=args.debug_ocr,
-        column_count=args.column_count,
-        ocr_only_mode=ocr_only_mode,
-    )
-    _summarise(collection)
-
-    if args.export_json or args.mei_json:
-        resolved_folio = args.folio or Path(image_path).stem
-        _mode = "ocr_only" if ocr_only_mode else "cantus_aligned"
-        payload = _build_pipeline_payload(
-            collection, image_path, manifest,
-            folio=resolved_folio, mode=_mode,
+    original_image_path = str(Path(args.image).expanduser().resolve())
+    try:
+        collection, manifest = run(
+            image_path=image_path,
+            folio=args.folio,
+            source_id=args.source_id,
+            csv_path=args.csv,
+            segmentation_model=args.segmentation_model,
+            recognition_model=recognition_model,
+            device=args.device,
+            line_offset=args.line_offset,
+            column_bimodal_threshold=args.column_bimodal_threshold,
+            prev_folio_state=prev_state,
+            folio_state_out=args.folio_state_out,
+            debug_ocr=args.debug_ocr,
+            column_count=args.column_count,
+            ocr_only_mode=ocr_only_mode,
         )
+        _summarise(collection)
 
-        if args.export_json:
-            with open(args.export_json, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
-            logger.info("Exported pipeline JSON to %s", args.export_json)
+        if args.export_json or args.mei_json:
+            resolved_folio = args.folio or Path(original_image_path).stem
+            _mode = "ocr_only" if ocr_only_mode else "cantus_aligned"
+            payload = _build_pipeline_payload(
+                collection, original_image_path, manifest,
+                folio=resolved_folio, mode=_mode,
+            )
 
-        if args.mei_json:
-            _write_mei_json(payload, args.mei_json)
+            if args.export_json:
+                with open(args.export_json, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                logger.info("Exported pipeline JSON to %s", args.export_json)
+
+            if args.mei_json:
+                _write_mei_json(payload, args.mei_json)
+    finally:
+        if _mothra_tmp:
+            Path(_mothra_tmp).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 ## run_mothra_inference.py
 
 Runs the DDMAL-lab YOLOv11 mothra models on folio images to produce annotation JSONs
-compatible with `run_pipeline_mothra.py`. Downloads `text_music_detector_fulldata.pt`
+compatible with `run_pipeline.py --mothra-json`. Downloads `text_music_detector_fulldata.pt`
 and `stave_detector_fulldata.pt` from `DDMAL-lab/mothra-yolov11-checkpoints` on first
 run (cached by `huggingface_hub`). Requires HF token at `~/.cache/huggingface/token`.
 

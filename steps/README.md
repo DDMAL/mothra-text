@@ -272,13 +272,13 @@ Requires `volpiano-display-utilities` (`pip install volpiano-display-utilities`)
 ### `MothraImageMask(mothra_json_path, padding_px=25)`
 
 Produces a masked version of a folio image that shows only mothra classId-1 (text)
-regions; all other pixels are set to black. Used by `run_pipeline_mothra.py` for
-Approach A (masked-image segmentation).
+regions; all other pixels are set to black. Used by `run_pipeline.py` when
+`--mothra-json` is provided.
 
 - **`apply(pil_image) → PIL.Image`** — for each classId-1 bbox `[x, y, w, h]` in the
   mothra JSON, paints a white rectangle expanded by `padding_px` on all sides (clamped
   to image bounds) on a black canvas, then composites the original image through the
-  mask. The default `padding_px=25` merges adjacent word-level detections on the same
+  mask. The default `padding_px=15` merges adjacent word-level detections on the same
   physical line into a continuous strip that Kraken can detect as a full line.
 
 ---
@@ -288,8 +288,8 @@ Approach A (masked-image segmentation).
 ### `MothraUnionStep(mothra_json_path, iou_threshold=0.3, min_width=50, overlap_threshold=0.5)`
 
 Injects mothra classId-1 (text) line detections that Kraken BLLA missed into the
-HTRflow collection. Runs after `KrakenSegmentation` and before column clustering in
-`run_pipeline_mothra.py` (Approach B).
+HTRflow collection. Deprecated; was used in the union approach (Approach B) which
+has been removed from the main pipeline.
 
 - **`run(collection) → Collection`**:
   1. Groups mothra word-level bboxes into line-level bboxes using the same y-overlap

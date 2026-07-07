@@ -18,9 +18,11 @@ This document describes the full set of choices a user makes when running mothra
 | `--debug-ocr` | **Stripped** — internal only | — |
 | `--stub-mode` | Advanced | off |
 | `--device` | Advanced | cpu |
+| `--padding` | Advanced | 15 px |
 | `--line-offset` | Advanced | 0 |
 | `--column-bimodal-threshold` | Advanced | 0.5 |
 | `--prev-folio-state` | Advanced | — |
+| `--mothra-json` | Auto-provided by upstream step; pipeline runs without masking if unavailable | — |
 | `--folio-state-out` | Auto-managed by pipeline | — |
 | `--export-json` | Output panel — always on in GUI | — |
 | `--mei-json` | Output panel — optional | — |
@@ -57,7 +59,7 @@ flowchart TD
     ADV_GATE -->|No, use defaults| OUTPUT
     ADV_GATE -->|Yes, expand| ADV_OPTIONS
 
-    ADV_OPTIONS["Skip OCR — stub mode\nLine offset — skip first N Cantus lines\nColumn sensitivity — bimodal threshold slider 0–1\nPrevious folio state — JSON sidecar for chaining\nDevice — cpu / gpu"]
+    ADV_OPTIONS["Skip OCR — stub mode\nMasking expansion — padding px slider\nLine offset — skip first N Cantus lines\nColumn sensitivity — bimodal threshold slider 0–1\nPrevious folio state — JSON sidecar for chaining\nDevice — cpu / mps / gpu"]
     ADV_OPTIONS --> OUTPUT
 
     OUTPUT{8. Output format?}
@@ -67,7 +69,8 @@ flowchart TD
 
     RUN([▶ Run Pipeline])
 
-    RUN --> S1[Stage 1 · BLLA Line Segmentation]
+    RUN --> S0[Stage 0 · Text-region masking\nAuto-applied by upstream step\nSkipped silently if unavailable]
+    S0 --> S1[Stage 1 · BLLA Line Segmentation]
     S1 --> S2[Stage 2 · Column Clustering + Reading Order]
     S2 --> S3[Stage 3 · HTR Text Recognition]
     S3 --> S4{Cantus-aligned?}
@@ -83,6 +86,10 @@ flowchart TD
 
 ## Notes
 
+**Text-region masking (automatic)** — An upstream step supplies a file marking which areas of the image are chant text vs music notation; the pipeline blacks out everything else before running line detection. This prevents Kraken from picking up neumes, staves, and decorative elements as text lines. If the upstream step does not return a result, masking is silently skipped and the pipeline runs on the full image.
+
+**Masking expansion (`--padding`, default 15 px)** — Each marked text area is expanded by this many pixels in all directions before masking. Larger values help merge nearby word-level marks into full line strips but can bleed into adjacent music rows on densely packed pages. Reduce to ~10 px if neume rows are being incorrectly detected as text.
+
 **Column count auto-detect** uses a bimodal coverage-profile histogram of the horizontal extent of all detected line polygons. The algorithm looks for a valley (gap between two columns) in the inner 20–80% of the text region. The Advanced sensitivity slider controls how deep that valley must be relative to the surrounding peaks — lower values require a deeper, cleaner gap.
 
 **Force 2 columns** still runs the bimodal algorithm to locate the actual split position; it only skips the decision of whether to split.
@@ -91,4 +98,8 @@ flowchart TD
 
 **Skip OCR (stub mode)** still runs segmentation and produces word/syllable geometry — it just leaves text empty. Useful for geometry-only workflows or when no HTR model is available.
 
-**Multi-folio chaining** via previous folio state handles chants that cross a page break. The pipeline automatically infers continuation from the Cantus CSV when possible; the explicit sidecar JSON is only needed when chaining across separate pipeline runs.
+**Line offset (`--line-offset`)** — If the folio starts partway through a chant (the first lines belong to a chant from the previous page), this skips the first N Cantus text entries before alignment begins.
+
+**Device (`--device`)** — `cpu` works everywhere; `mps` (Apple Silicon) or `cuda` (NVIDIA GPU) runs Kraken significantly faster when available.
+
+**Multi-folio chaining** via previous folio state handles chants that cross a page break. The pipeline automatically infers continuation from the Cantus CSV when possible; the explicit sidecar JSON is only needed when chaining across separate pipeline runs. `--folio-state-out` is auto-managed in the GUI; only supply `--prev-folio-state` manually when chaining consecutive folios from the command line.

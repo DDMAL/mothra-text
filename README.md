@@ -124,18 +124,20 @@ available for one-off runs or non-consecutive folios.
 
 ---
 
-### 1b. Mothra text-detection integration (experimental)
+### 1b. Text-region masking
 
-`run_pipeline_mothra.py` masks the folio image to mothra object-detection output
-(classId-1 text bboxes) before passing it to Kraken BLLA. This reduces noise from
-staves, neumes, and non-chant regions. `run_pipeline.py` is **not modified**; all new
-code is in new files and can be deleted to revert.
+In the production pipeline, a mothra text-detection JSON is supplied automatically
+by an upstream step and passed to `--mothra-json`; the pipeline skips masking silently
+if the upstream step does not return a result. For local research runs, pass
+`--mothra-json` directly to black out non-text regions (staves, neumes, decorations)
+before Kraken BLLA runs.
 
-Use `--padding` (default 15px) to control how much each text bbox is expanded to help
-Kraken form full lines.
+Use `--padding` (default 15 px) to control how much each text bbox is expanded to help
+Kraken form full lines. Reduce to ~10 px on manuscripts where text and neume rows
+are closely packed.
 
 ```bash
-python run_pipeline_mothra.py \
+python run_pipeline.py \
     --image path/to/folio.jpg \
     --folio "012v" \
     --source-id 599679 \
@@ -143,7 +145,12 @@ python run_pipeline_mothra.py \
     --export-json ~/Downloads/DDMAL/mothra_masked_12v.json
 ```
 
-The `--approach union` mode is deprecated and should not be used.
+**Masking flags:**
+
+| Flag | Description |
+|---|---|
+| `--mothra-json PATH` | Mothra annotation JSON for this folio. Blacks out non-text regions before line segmentation. Omit to run without masking. |
+| `--padding PX` | Pixels added around each text bbox before masking (default 15). |
 
 Compare results with `scripts/compare_runs.py`. Load all output JSONs into the
 Pipeline Inspector GUI for visual comparison.
