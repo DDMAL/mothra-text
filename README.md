@@ -131,7 +131,7 @@ available for one-off runs or non-consecutive folios.
 staves, neumes, and non-chant regions. `run_pipeline.py` is **not modified**; all new
 code is in new files and can be deleted to revert.
 
-Use `--padding` (default 25px) to control how much each text bbox is expanded to help
+Use `--padding` (default 15px) to control how much each text bbox is expanded to help
 Kraken form full lines.
 
 ```bash

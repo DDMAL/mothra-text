@@ -92,6 +92,43 @@ The `--output` file is never overwritten; choose a new name each run.
 
 ---
 
+## debug_column_detection.py
+
+Runs Kraken BLLA segmentation followed by the column detection algorithm on every
+image in a folder, producing per-image annotated visualisations and a summary table.
+Useful for auditing whether the bimodal column detector correctly classifies a batch
+of folios before running the full pipeline.
+
+Output goes to a `debug/` subdirectory inside the input folder:
+- `<stem>_debug.png` — folio image with line bboxes colour-coded by detected column
+  (red = left / single column, blue = right column), a vertical split-x marker, and
+  a horizontal coverage profile chart below.
+- `summary.txt` — one row per image with `n_lines`, `pred` (1 or 2 columns),
+  `split_x`, `gutter_ratio`, and (if `--expected` is given) a `correct` column.
+
+```
+python scripts/debug_column_detection.py --folder path/to/images [options]
+
+positional arguments:
+  --folder PATH         directory of folio images to process
+
+options:
+  --expected {1,2}      expected column count; adds a correct/NO column to the
+                        summary (optional)
+  --model PATH          custom BLLA model (.mlmodel or .safetensors);
+                        omit to use the Kraken built-in
+```
+
+**Example**
+
+```
+python scripts/debug_column_detection.py \
+    --folder ~/Downloads/DDMAL/mothra-text-layer/images/ \
+    --expected 2
+```
+
+---
+
 ## convert_to_mei_input.py
 
 Converts a mothra-text `--export-json` output file to the **Text Alignment JSON** format

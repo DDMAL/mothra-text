@@ -219,8 +219,8 @@ def main() -> None:
 
     # Approach A options
     parser.add_argument(
-        "--padding", type=int, default=25, metavar="PX",
-        help="[masked] Pixels added around each text bbox before masking (default 25).",
+        "--padding", type=int, default=15, metavar="PX",
+        help="[masked] Pixels added around each text bbox before masking (default 15).",
     )
 
     # Approach B options
