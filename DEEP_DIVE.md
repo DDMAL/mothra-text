@@ -266,7 +266,7 @@ After processing all folio rows, `FlatTextData` contains:
 - `chant_spans`: `ChantSpan(sequence, start_word, end_word)` list — which words belong to which chant
 - `mid_word_breaks`: `MidWordBreak(anchor_word_index, syl_left, syl_right)` for breaks mid-word
 - `continuation_words`: words physically on the next folio (no separate CSV row for them)
-- `initial_pointer`: start position accounting for `--line-offset`
+- `initial_pointer`: start position for NW alignment (0 unless continuation was prepended)
 
 **Continuation handling:** when `prev_folio_state` is provided, its `remaining_words` are prepended to `flat_text.words`. When it's absent, the code scans preceding CSV rows for the last row with a `77` break and automatically infers the carry-over (`infer_continuation=True`). If no continuation is found and the first word of the folio is lowercase, a `continuation_missing` validation flag is emitted.
 
@@ -340,7 +340,7 @@ class FlatTextData:
     anchors: list[Anchor]               # volpiano break positions
     chant_spans: list[ChantSpan]        # which words belong to which chant
     mid_word_breaks: list[MidWordBreak] # breaks that fall mid-word
-    initial_pointer: int                # start index (after line_offset)
+    initial_pointer: int                # start index for NW alignment
     continuation_words: list[str]       # post-77 words for next folio
     has_continuation: bool              # True when prev-folio words were prepended
     suffix_probe_words: list[str]       # preceding folio's last chant words

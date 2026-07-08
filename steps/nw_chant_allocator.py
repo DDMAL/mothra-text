@@ -257,7 +257,6 @@ def _parse_row_words_and_anchors(
 def build_flat_text_and_anchors(
     csv_rows: list[dict],
     folio: str,
-    line_offset: int = 0,
     prev_folio_state: FolioState | None = None,
     infer_continuation: bool = True,
 ) -> FlatTextData:
@@ -266,9 +265,6 @@ def build_flat_text_and_anchors(
     Args:
         csv_rows:           All rows from a Cantus CSV (any folio).
         folio:              Folio string to filter rows (e.g. "006r").
-        line_offset:        Number of within_chant_7 breaks to skip
-                            before alignment starts. Use when the image
-                            crop begins partway into the folio.
         prev_folio_state:   FolioState from the previous folio run.
                             If provided, its remaining_words (post-77
                             continuation) are prepended to flat_text
@@ -400,14 +396,7 @@ def build_flat_text_and_anchors(
             no_volpiano_count, len(folio_rows), folio,
         )
 
-    # Advance initial_pointer past the first line_offset within_chant_7 breaks.
     initial_pointer = 0
-    if line_offset > 0:
-        within_anchors = [
-            a for a in anchors if a.anchor_type == "within_chant_7"
-        ]
-        if line_offset <= len(within_anchors):
-            initial_pointer = within_anchors[line_offset - 1].word_index
 
     # When no continuation was found, try to build a suffix probe from the
     # immediately preceding folio's last chant row.  Used by allocate_lines

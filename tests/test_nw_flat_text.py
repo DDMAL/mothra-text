@@ -142,27 +142,6 @@ class TestFiltering:
         assert result.words == ["first", "second", "third"]
 
 
-class TestLineOffset:
-    def test_line_offset_zero_no_skip(self):
-        rows = [_row("001r", "1", "a b c d", volpiano="x---y7---z---w")]
-        result = build_flat_text_and_anchors(rows, "001r", line_offset=0)
-        assert result.initial_pointer == 0
-
-    def test_line_offset_sets_initial_pointer(self):
-        # Two within_chant_7 breaks; line_offset=1 → skip past first break
-        rows = [_row("001r", "1", "a b c d e f",
-                     volpiano="x---y7---z---w7---v---u")]
-        result = build_flat_text_and_anchors(rows, "001r", line_offset=1)
-        within_anchors = [a for a in result.anchors if a.anchor_type == "within_chant_7"]
-        assert result.initial_pointer == within_anchors[0].word_index
-
-    def test_line_offset_beyond_anchors_clamps_to_zero(self):
-        # line_offset=5 but only 1 within_chant_7 anchor → initial_pointer stays 0
-        rows = [_row("001r", "1", "a b c d", volpiano="x---y7---z---w")]
-        result = build_flat_text_and_anchors(rows, "001r", line_offset=5)
-        assert result.initial_pointer == 0
-
-
 class TestPrevFolioState:
     def test_prev_state_prepends_remaining_words(self):
         prev = MagicMock()

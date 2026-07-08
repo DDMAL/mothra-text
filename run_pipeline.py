@@ -207,7 +207,6 @@ def run(
     segmentation_model: str | None = None,
     recognition_model: str | None = None,
     device: str = "cpu",
-    line_offset: int = 0,
     column_bimodal_threshold: float = 0.5,
     prev_folio_state: "FolioState | None" = None,
     folio_state_out: str | None = None,
@@ -231,9 +230,6 @@ def run(
             Kraken ``.mlmodel`` file.  Pass ``None`` (default) to run
             in stub mode (empty text, pipeline still completes).
         device: Kraken inference device (``"cpu"`` or ``"cuda"``).
-        line_offset: Cantus lines to skip before aligning with detected
-            nodes.  Use when the image is a crop starting partway
-            through the folio.  Ignored in OCR-only mode.
         column_bimodal_threshold: Maximum ratio of the coverage-profile
             valley to the smaller column peak for the valley to be
             treated as a genuine inter-column gutter.  See cluster_columns().
@@ -334,7 +330,6 @@ def run(
             )
             print(f"[OCR-only mode] Folio label: {folio}")
             _ignored_flags = [
-                (line_offset != 0, "--line-offset"),
                 (prev_folio_state is not None, "--prev-folio-state"),
                 (folio_state_out is not None, "--folio-state-out"),
             ]
@@ -360,7 +355,6 @@ def run(
             csv_rows = fetch_cantus_csv(source_id)
         flat_text = build_flat_text_and_anchors(
             csv_rows, folio,
-            line_offset=line_offset,
             prev_folio_state=prev_folio_state,
         )
 
@@ -637,12 +631,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--line-offset", type=int, default=0, metavar="N",
-        help="Skip the first N Cantus lines before aligning with detected "
-             "nodes. Use when the image is a crop starting partway through "
-             "the folio (default: 0).",
-    )
-    parser.add_argument(
         "--column-bimodal-threshold",
         type=float, default=0.5, metavar="FLOAT",
         help="Maximum ratio of the coverage-profile valley to the smaller "
@@ -675,6 +663,13 @@ def main() -> None:
         help="Pixels added around each text bbox when masking (default 15). "
              "Only used when --mothra-json is given.",
     )
+    parser.add_argument(
+        "--skip-masking", action="store_true", default=False,
+        help=(
+            "Skip text-region masking even if --mothra-json is provided. "
+            "Masking is also skipped automatically when --mothra-json is absent."
+        ),
+    )
     args = parser.parse_args()
 
     ocr_only_mode = not args.csv and not args.source_id
@@ -688,7 +683,7 @@ def main() -> None:
         parser.error(f"Image not found: {image_path}")
 
     _mothra_tmp: str | None = None
-    if args.mothra_json:
+    if args.mothra_json and not args.skip_masking:
         from PIL import Image as _PILImage
         from steps.mothra_mask import MothraImageMask as _MothraImageMask
         mothra_json_path = str(Path(args.mothra_json).expanduser().resolve())
@@ -703,6 +698,8 @@ def main() -> None:
             masked_img.save(_tmp.name)
             _mothra_tmp = _tmp.name
         image_path = _mothra_tmp
+    elif args.skip_masking:
+        logger.info("--skip-masking set; text-region masking disabled.")
     else:
         logger.info("No --mothra-json provided; running without text-region masking.")
 
@@ -712,7 +709,6 @@ def main() -> None:
             "Cantus alignment will be skipped"
         )
         _cantus_flags = [
-            (args.line_offset != 0, "--line-offset"),
             (args.prev_folio_state, "--prev-folio-state"),
             (args.folio_state_out, "--folio-state-out"),
         ]
@@ -750,7 +746,6 @@ def main() -> None:
             segmentation_model=args.segmentation_model,
             recognition_model=recognition_model,
             device=args.device,
-            line_offset=args.line_offset,
             column_bimodal_threshold=args.column_bimodal_threshold,
             prev_folio_state=prev_state,
             folio_state_out=args.folio_state_out,

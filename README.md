@@ -54,7 +54,6 @@ python run_pipeline.py \
 | `--column-count {1,2}` | Declare column count; skips bimodal auto-detection |
 | `--recognition-model PATH` | Kraken HTR model; defaults to Tridis if installed |
 | `--stub-mode` | Skip text recognition; pipeline still runs using ground-truth text |
-| `--line-offset N` | Skip first N volpiano line-break markers (for cropped images; Cantus mode only) |
 | `--prev-folio-state PATH` | JSON sidecar from the previous folio run (post-77 continuation words; Cantus mode only) |
 | `--folio-state-out PATH` | Write folio state JSON for the next folio run (Cantus mode only) |
 | `--export-json PATH` | Write output JSON for the Pipeline Inspector GUI |
@@ -64,8 +63,8 @@ python run_pipeline.py \
 **OCR-only mode:** When neither `--csv` nor `--source-id` is given, the pipeline skips
 Cantus data loading and NW alignment entirely. Steps 1–4 run normally; word boundaries come
 from OCR word splitting and syllables are Latin-syllabified from the OCR text. The exported
-JSON will contain `"mode": "ocr_only"` instead of `"cantus_aligned"`. Flags `--line-offset`,
-`--prev-folio-state`, and `--folio-state-out` are ignored with a warning.
+JSON will contain `"mode": "ocr_only"` instead of `"cantus_aligned"`. Flags
+`--prev-folio-state` and `--folio-state-out` are ignored with a warning.
 
 ```bash
 # OCR-only (no Cantus data needed)

@@ -19,13 +19,13 @@ This document describes the full set of choices a user makes when running mothra
 | `--stub-mode` | Advanced | off |
 | `--device` | Advanced | cpu |
 | `--padding` | Advanced | 15 px |
-| `--line-offset` | Advanced | 0 |
+| `--skip-masking` | Advanced | off |
 | `--column-bimodal-threshold` | Advanced | 0.5 |
 | `--prev-folio-state` | Advanced | — |
 | `--mothra-json` | Auto-provided by upstream step; pipeline runs without masking if unavailable | — |
 | `--folio-state-out` | Auto-managed by pipeline | — |
-| `--export-json` | Output panel — always on in GUI | — |
-| `--mei-json` | Output panel — optional | — |
+| `--export-json` | Output panel — optional; creates a Pipeline Inspector JSON for result analysis | — |
+| `--mei-json` | Auto-passed to MEI encoding stage; not user-facing | — |
 
 ---
 
@@ -59,13 +59,12 @@ flowchart TD
     ADV_GATE -->|No, use defaults| OUTPUT
     ADV_GATE -->|Yes, expand| ADV_OPTIONS
 
-    ADV_OPTIONS["Skip OCR — stub mode\nMasking expansion — padding px slider\nLine offset — skip first N Cantus lines\nColumn sensitivity — bimodal threshold slider 0–1\nPrevious folio state — JSON sidecar for chaining\nDevice — cpu / mps / gpu"]
+    ADV_OPTIONS["Skip OCR — stub mode\nMasking expansion — padding px slider\nSkip masking — bypass text-region masking\nColumn sensitivity — bimodal threshold slider 0–1\nPrevious folio state — JSON sidecar for chaining\nDevice — cpu / mps / gpu"]
     ADV_OPTIONS --> OUTPUT
 
-    OUTPUT{8. Output format?}
-    OUTPUT -->|Pipeline JSON\nGUI overlay| RUN
-    OUTPUT -->|MEI JSON\ntext alignment| RUN
-    OUTPUT -->|Both| RUN
+    OUTPUT{8. Export Pipeline Inspector JSON?}
+    OUTPUT -->|Yes — optional for analysis| RUN
+    OUTPUT -->|No — MEI encoding only| RUN
 
     RUN([▶ Run Pipeline])
 
@@ -94,12 +93,12 @@ flowchart TD
 
 **Force 2 columns** still runs the bimodal algorithm to locate the actual split position; it only skips the decision of whether to split.
 
-**Custom segmentation models** accept Kraken `.mlmodel` (CoreML) or `.safetensors` format. The current recommended model is Gen Model 1 (`best_0.5278.safetensors`), which produces clean logical-line segmentation. When a column-count-specific fine-tuned model is available, pass it alongside `--column-count`.
+**Custom segmentation models** accept Kraken `.mlmodel` (CoreML) or `.safetensors` format. The default is Kraken's built-in BLLA model. When a fine-tuned model trained on similar manuscript material is available, pass it via `--segmentation-model`. When using a model optimised for a specific column layout, pass `--column-count` alongside it.
 
 **Skip OCR (stub mode)** still runs segmentation and produces word/syllable geometry — it just leaves text empty. Useful for geometry-only workflows or when no HTR model is available.
 
-**Line offset (`--line-offset`)** — If the folio starts partway through a chant (the first lines belong to a chant from the previous page), this skips the first N Cantus text entries before alignment begins.
-
 **Device (`--device`)** — `cpu` works everywhere; `mps` (Apple Silicon) or `cuda` (NVIDIA GPU) runs Kraken significantly faster when available.
 
-**Multi-folio chaining** via previous folio state handles chants that cross a page break. The pipeline automatically infers continuation from the Cantus CSV when possible; the explicit sidecar JSON is only needed when chaining across separate pipeline runs. `--folio-state-out` is auto-managed in the GUI; only supply `--prev-folio-state` manually when chaining consecutive folios from the command line.
+**Multi-folio chaining** via previous folio state handles chants that cross a page break. `--folio-state-out` is auto-managed in the GUI; only supply `--prev-folio-state` manually when chaining consecutive folios from the command line.
+
+For troubleshooting guidance and fuller explanations of each option, see [`user_guide.md`](user_guide.md).

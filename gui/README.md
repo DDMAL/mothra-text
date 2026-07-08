@@ -63,18 +63,6 @@ NW alignment uses volpiano anchors only, and word boxes are placed from Cantus g
 truth alone. Stub mode is useful for testing segmentation and JSON export without a
 trained model.
 
-If the image is a crop starting partway through the folio, use `--line-offset N`
-to skip the first N Cantus lines before aligning with detected line nodes:
-
-```bash
-python run_pipeline.py \
-    --image path/to/folio_cropped.jpg \
-    --source-id <cantus_source_id> \
-    --folio "006r" \
-    --line-offset 2 \
-    --export-json path/to/output.json
-```
-
 ---
 
 ## Local development
