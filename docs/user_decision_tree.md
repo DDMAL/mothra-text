@@ -25,7 +25,8 @@ This document describes the full set of choices a user makes when running mothra
 | `--mothra-json` | Auto-provided by upstream step; pipeline runs without masking if unavailable | — |
 | `--folio-state-out` | Auto-managed by pipeline | — |
 | `--export-json` | Output panel — optional; creates a Pipeline Inspector JSON for result analysis | — |
-| `--mei-json` | Auto-passed to MEI encoding stage; not user-facing | — |
+| `--output-dir` | Auto-managed by landing page in batch mode; not user-facing | — |
+| `--mei-json` | Auto-named via `--output-dir` in batch mode; not user-facing | — |
 
 ---
 
@@ -64,7 +65,7 @@ flowchart TD
 
     OUTPUT{8. Export Pipeline Inspector JSON?}
     OUTPUT -->|Yes — optional for analysis| RUN
-    OUTPUT -->|No — MEI encoding only| RUN
+    OUTPUT -->|No — proceed to run| RUN
 
     RUN([▶ Run Pipeline])
 
@@ -100,5 +101,7 @@ flowchart TD
 **Device (`--device`)** — `cpu` works everywhere; `mps` (Apple Silicon) or `cuda` (NVIDIA GPU) runs Kraken significantly faster when available.
 
 **Multi-folio chaining** via previous folio state handles chants that cross a page break. `--folio-state-out` is auto-managed in the GUI; only supply `--prev-folio-state` manually when chaining consecutive folios from the command line.
+
+**MEI JSON output naming** — In batch mode the landing page supplies `--output-dir`, which causes the pipeline to write the MEI JSON (the input to the next pipeline step) with a regularized filename derived from the Cantus source metadata: `{RISM-code}_{shelfmark}_{folio}.json` — for example `CH-E_611_001r.json`. The RISM code and shelfmark are extracted from the Cantus CSV that the pipeline already downloads; no additional API call is needed. The `"folio"` field inside the JSON also uses this regularized identifier, so downstream steps have the full source identity without parsing the filename.
 
 For troubleshooting guidance and fuller explanations of each option, see [`user_guide.md`](user_guide.md).

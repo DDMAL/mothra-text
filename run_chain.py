@@ -47,6 +47,10 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error(
             f"--export-json ({len(args.export_json)}) must match --images ({n})"
         )
+    if args.mei_json is not None and len(args.mei_json) != n:
+        parser.error(
+            f"--mei-json ({len(args.mei_json)}) must match --images ({n})"
+        )
     if n < 2:
         parser.error(
             "At least 2 folios are required for chaining. "
@@ -66,12 +70,16 @@ def _run_one(
     folio: str,
     prev_state: "object | None",
     export_json_path: "str | None",
+    mei_json_path: "str | None",
+    folio_label: "str",
     folio_states_dir: "str | None",
     recognition_model: "str | None",
     args: argparse.Namespace,
     run: "callable",
     export_json: "callable",
     read_folio_state: "callable",
+    build_pipeline_payload: "callable",
+    write_mei_json: "callable",
 ) -> "object":
     logger = logging.getLogger(__name__)
     logger.info("Folio %d/%d: %s", idx + 1, total, folio)
@@ -103,6 +111,13 @@ def _run_one(
     if export_json_path:
         Path(export_json_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
         export_json(collection, image_path, manifest, str(Path(export_json_path).expanduser()))
+
+    if mei_json_path:
+        payload = build_pipeline_payload(
+            collection, image_path, manifest,
+            folio=folio_label, mode="cantus_aligned",
+        )
+        write_mei_json(payload, mei_json_path)
 
     next_state = read_folio_state(tmp_path)
     logger.info(
@@ -167,14 +182,26 @@ def main() -> None:
     parser.add_argument("--debug-ocr", action="store_true", default=False,
                         help="Print per-line OCR transcripts and NW alignment detail "
                              "for every folio.")
+    parser.add_argument(
+        "--output-dir", metavar="PATH", default=None,
+        help="Directory for auto-named MEI JSON outputs. Each folio is written as "
+             "{RISM-code}_{shelfmark}_{folio}.json (e.g. CH-E_611_001r.json). "
+             "Overridden per-folio by --mei-json if both are given.",
+    )
+    parser.add_argument(
+        "--mei-json", nargs="+", default=None, metavar="PATH",
+        help="One MEI JSON output path per folio (same order as --images). "
+             "Takes precedence over --output-dir when both are given.",
+    )
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", force=True)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from run_pipeline import run, export_json  # noqa: E402  (basicConfig race resolved above)
+    from run_pipeline import run, export_json, _build_pipeline_payload, _write_mei_json  # noqa: E402
     from steps.nw_chant_allocator import read_folio_state  # noqa: E402
+    from steps.gt_manifest import fetch_cantus_csv, load_local_csv, make_output_stem  # noqa: E402
 
     _validate_args(parser, args)
 
@@ -196,12 +223,32 @@ def main() -> None:
     n = len(images)
     export_paths = args.export_json or [None] * n
 
+    # Build per-folio MEI JSON paths: explicit --mei-json takes precedence,
+    # otherwise auto-name from --output-dir using the regularized stem.
+    if args.mei_json:
+        mei_paths = args.mei_json
+        folio_labels = list(args.folios)
+    elif args.output_dir:
+        csv_rows = (
+            fetch_cantus_csv(args.source_id)
+            if args.source_id
+            else load_local_csv(args.csv)
+        )
+        out_dir = Path(args.output_dir).expanduser()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stems = [make_output_stem(csv_rows, f) for f in args.folios]
+        mei_paths = [str(out_dir / f"{stem}.json") for stem in stems]
+        folio_labels = stems
+    else:
+        mei_paths = [None] * n
+        folio_labels = list(args.folios)
+
     logger = logging.getLogger(__name__)
     completed = 0
     prev_state = None
 
-    for i, (image_path, folio, out_json) in enumerate(
-        zip(images, args.folios, export_paths)
+    for i, (image_path, folio, out_json, mei_path, folio_label) in enumerate(
+        zip(images, args.folios, export_paths, mei_paths, folio_labels)
     ):
         try:
             prev_state = _run_one(
@@ -211,12 +258,16 @@ def main() -> None:
                 folio=folio,
                 prev_state=prev_state,
                 export_json_path=out_json,
+                mei_json_path=mei_path,
+                folio_label=folio_label,
                 folio_states_dir=args.folio_states_dir,
                 recognition_model=recognition_model,
                 args=args,
                 run=run,
                 export_json=export_json,
                 read_folio_state=read_folio_state,
+                build_pipeline_payload=_build_pipeline_payload,
+                write_mei_json=_write_mei_json,
             )
             completed += 1
         except Exception as exc:

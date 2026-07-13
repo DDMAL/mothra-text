@@ -12,6 +12,7 @@ the GroundTruthLookup callable expected by GroundTruthWordSegmentation.
 """
 
 import csv
+import functools
 import io
 import json
 import logging
@@ -129,6 +130,7 @@ def split_by_volpiano(text: str, volpiano: str) -> list[str]:
 # CSV fetch
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=None)
 def fetch_cantus_csv(source_id: int) -> list[dict]:
     """Download the Cantus CSV for a source and return it as a list of dicts.
 
@@ -149,6 +151,25 @@ def fetch_cantus_csv(source_id: int) -> list[dict]:
     with urllib.request.urlopen(req) as response:
         content = response.read().decode("utf-8-sig")  # handle BOM if present
     return list(csv.DictReader(io.StringIO(content)))
+
+
+def make_output_stem(csv_rows: list[dict], folio: str) -> str:
+    """Construct the regularized output filename stem for a folio.
+
+    Combines the RISM institution code and shelfmark from the Cantus CSV with
+    the folio identifier, producing e.g. ``CH-E_611_001r``.
+
+    ``holding_institution`` is stored as "Full Name (RISM-Code)" — only the
+    parenthetical code is used.  ``shelfmark`` may contain parenthetical
+    alternate designations (e.g. "29 (olim 38/8 f.)") — these are stripped.
+    Spaces in either field are replaced with underscores.
+    """
+    row = csv_rows[0]
+    m = re.search(r"\(([^)]+)\)$", row["holding_institution"].strip())
+    institution = m.group(1) if m else row["holding_institution"].strip()
+    institution = institution.replace(" ", "_")
+    shelfmark = re.sub(r"\s*\([^)]*\)", "", row["shelfmark"]).strip().replace(" ", "_")
+    return f"{institution}_{shelfmark}_{folio}"
 
 
 # ---------------------------------------------------------------------------

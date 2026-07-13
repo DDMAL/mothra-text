@@ -57,7 +57,8 @@ python run_pipeline.py \
 | `--prev-folio-state PATH` | JSON sidecar from the previous folio run (post-77 continuation words; Cantus mode only) |
 | `--folio-state-out PATH` | Write folio state JSON for the next folio run (Cantus mode only) |
 | `--export-json PATH` | Write output JSON for the Pipeline Inspector GUI |
-| `--mei-json PATH` | Write MEI Text Alignment JSON (flat `syl_boxes` format) |
+| `--mei-json PATH` | Write MEI Text Alignment JSON to an explicit path (overrides `--output-dir`) |
+| `--output-dir PATH` | Directory for auto-named MEI JSON output. Requires `--source-id`/`--csv` and `--folio`. Output is named `{RISM-code}_{shelfmark}_{folio}.json` (e.g. `CH-E_611_001r.json`). The `"folio"` field inside the JSON also uses this regularized name. |
 | `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail; in OCR-only mode also prints a startup banner and lists any ignored flags |
 
 **OCR-only mode:** When neither `--csv` nor `--source-id` is given, the pipeline skips
@@ -96,20 +97,31 @@ folios in a single command — intermediate `FolioState` sidecar files are manag
 automatically:
 
 ```bash
+# Auto-named MEI JSON outputs (recommended for batch use)
 python run_chain.py \
     --images 006r.jpg 007v.jpg 008r.jpg \
     --folios 006r 007v 008r \
     --source-id 123672 \
-    --export-json ~/Downloads/DDMAL/006r.json \
-                  ~/Downloads/DDMAL/007v.json \
-                  ~/Downloads/DDMAL/008r.json
+    --output-dir ~/Downloads/DDMAL/
+# Produces: CH-E_611_006r.json, CH-E_611_007v.json, CH-E_611_008r.json
+
+# Explicit output paths (legacy / one-off)
+python run_chain.py \
+    --images 006r.jpg 007v.jpg 008r.jpg \
+    --folios 006r 007v 008r \
+    --source-id 123672 \
+    --mei-json ~/Downloads/DDMAL/006r.json \
+               ~/Downloads/DDMAL/007v.json \
+               ~/Downloads/DDMAL/008r.json
 ```
 
 | Flag | Description |
 |---|---|
 | `--images PATH [...]` | Ordered folio image paths |
 | `--folios STR [...]` | Folio identifiers matching the CSV (same order as `--images`) |
-| `--export-json PATH [...]` | One output JSON path per folio; parent dirs created automatically |
+| `--output-dir PATH` | Directory for auto-named MEI JSON outputs (`{RISM-code}_{shelfmark}_{folio}.json` per folio). Recommended for batch use. |
+| `--mei-json PATH [...]` | One explicit MEI JSON path per folio; takes precedence over `--output-dir` |
+| `--export-json PATH [...]` | One pipeline inspector JSON path per folio; parent dirs created automatically |
 | `--folio-states-dir PATH` | Save intermediate `state_{folio}.json` files here for debugging |
 | `--debug-ocr` | Print per-line OCR and NW alignment detail for every folio |
 

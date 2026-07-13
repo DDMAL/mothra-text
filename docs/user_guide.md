@@ -22,6 +22,23 @@ Text-region masking is applied automatically by an upstream step — no extra in
 
 ---
 
+## Outputs
+
+The pipeline produces two optional output files:
+
+**MEI JSON** (`--output-dir PATH` or `--mei-json PATH`) — The primary output consumed by downstream steps such as mothra-encoding. In Cantus-aligned mode, the file is automatically named using information from the Cantus database:
+
+```
+{RISM-code}_{shelfmark}_{folio}.json
+e.g.  CH-E_611_001r.json
+```
+
+The RISM code and shelfmark are extracted from the Cantus CSV the pipeline already downloads — no extra input is needed. The `"folio"` field inside the JSON uses the same regularized identifier.
+
+**Pipeline Inspector JSON** (`--export-json PATH`) — An optional secondary output for visual inspection in the Pipeline Inspector GUI. Written only when an explicit path is given; not needed for downstream processing.
+
+---
+
 ## Optional inputs
 
 ### Column count

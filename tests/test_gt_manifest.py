@@ -9,8 +9,59 @@ from steps.gt_manifest import (
     build_page_manifest,
     clean_text,
     make_manifest_lookup,
+    make_output_stem,
     split_by_volpiano,
 )
+
+
+# ---------------------------------------------------------------------------
+# make_output_stem
+# ---------------------------------------------------------------------------
+
+def _make_csv_rows(holding_institution: str, shelfmark: str) -> list[dict]:
+    return [{"holding_institution": holding_institution, "shelfmark": shelfmark}]
+
+
+class TestMakeOutputStem:
+    def test_basic_rism_extraction(self):
+        rows = _make_csv_rows("Einsiedeln, Stiftsbibliothek (CH-E)", "611")
+        assert make_output_stem(rows, "001r") == "CH-E_611_001r"
+
+    def test_institution_with_space_in_rism_code(self):
+        # RISM codes do not contain spaces, but spaces within the full name
+        # before the parenthetical should not bleed into the code.
+        rows = _make_csv_rows("Graz, Universitätsbibliothek (A-Gu)", "29 (olim 38/8 f.)")
+        assert make_output_stem(rows, "001v") == "A-Gu_29_001v"
+
+    def test_shelfmark_parenthetical_stripped(self):
+        rows = _make_csv_rows("Somewhere, Library (XX-Xx)", "29 (olim 38/8 f.)")
+        assert make_output_stem(rows, "005r") == "XX-Xx_29_005r"
+
+    def test_shelfmark_with_internal_space_replaced(self):
+        # "Ms. 2" → "Ms._2" (space → underscore, period kept)
+        rows = _make_csv_rows("Fribourg, Bibliothèque des Cordeliers (CH-Fco)", "Ms. 2")
+        assert make_output_stem(rows, "108v") == "CH-Fco_Ms._2_108v"
+
+    def test_shelfmark_no_parenthetical(self):
+        rows = _make_csv_rows("Paris, Bibliothèque nationale de France (F-Pn)", "Latin 17436")
+        assert make_output_stem(rows, "029r") == "F-Pn_Latin_17436_029r"
+
+    def test_no_parenthetical_in_institution_uses_full_value(self):
+        # Fallback: if no parenthetical, use the whole holding_institution string.
+        rows = _make_csv_rows("UnknownLib", "99")
+        assert make_output_stem(rows, "001r") == "UnknownLib_99_001r"
+
+    def test_uses_first_row_only(self):
+        # Even if multiple rows are present, only the first is used for metadata.
+        rows = [
+            {"holding_institution": "A, Library (AA-Aa)", "shelfmark": "1"},
+            {"holding_institution": "B, Library (BB-Bb)", "shelfmark": "2"},
+        ]
+        assert make_output_stem(rows, "001r") == "AA-Aa_1_001r"
+
+    def test_folio_appended_verbatim(self):
+        rows = _make_csv_rows("City, Library (ZZ-Zz)", "123")
+        assert make_output_stem(rows, "012v") == "ZZ-Zz_123_012v"
 
 
 # ---------------------------------------------------------------------------

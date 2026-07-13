@@ -57,6 +57,7 @@ from steps.gt_manifest import (  # noqa: E402
     fetch_cantus_csv,
     load_local_csv,
     make_manifest_lookup,
+    make_output_stem,
 )
 from steps.ground_truth_word_segmentation import (  # noqa: E402
     GroundTruthWordSegmentation,
@@ -670,6 +671,12 @@ def main() -> None:
             "Masking is also skipped automatically when --mothra-json is absent."
         ),
     )
+    parser.add_argument(
+        "--output-dir", metavar="PATH", default=None,
+        help="Directory for auto-named MEI JSON output. Requires --source-id or "
+             "--csv and --folio. Output is named {RISM-code}_{shelfmark}_{folio}.json "
+             "(e.g. CH-E_611_001r.json). Overridden by --mei-json if both are given.",
+    )
     args = parser.parse_args()
 
     ocr_only_mode = not args.csv and not args.source_id
@@ -718,6 +725,26 @@ def main() -> None:
                     "%s is ignored in OCR-only mode", name
                 )
 
+    output_stem: str | None = None
+    out_dir: Path | None = None
+    if args.output_dir:
+        if ocr_only_mode:
+            parser.error(
+                "--output-dir requires --source-id or --csv "
+                "(not available in OCR-only mode)"
+            )
+        if not args.folio:
+            parser.error("--output-dir requires --folio")
+        early_rows = (
+            fetch_cantus_csv(args.source_id)
+            if args.source_id
+            else load_local_csv(args.csv)
+        )
+        output_stem = make_output_stem(early_rows, args.folio)
+        out_dir = Path(args.output_dir).expanduser()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Output stem: %s", output_stem)
+
     if args.stub_mode:
         recognition_model = None
     else:
@@ -755,21 +782,26 @@ def main() -> None:
         )
         _summarise(collection)
 
-        if args.export_json or args.mei_json:
-            resolved_folio = args.folio or Path(original_image_path).stem
+        effective_mei_json = args.mei_json or (
+            str(out_dir / f"{output_stem}.json") if output_stem else None
+        )
+        effective_export_json = args.export_json
+
+        if effective_export_json or effective_mei_json:
+            resolved_folio = output_stem or args.folio or Path(original_image_path).stem
             _mode = "ocr_only" if ocr_only_mode else "cantus_aligned"
             payload = _build_pipeline_payload(
                 collection, original_image_path, manifest,
                 folio=resolved_folio, mode=_mode,
             )
 
-            if args.export_json:
-                with open(args.export_json, "w", encoding="utf-8") as f:
+            if effective_export_json:
+                with open(effective_export_json, "w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
-                logger.info("Exported pipeline JSON to %s", args.export_json)
+                logger.info("Exported pipeline JSON to %s", effective_export_json)
 
-            if args.mei_json:
-                _write_mei_json(payload, args.mei_json)
+            if effective_mei_json:
+                _write_mei_json(payload, effective_mei_json)
     finally:
         if _mothra_tmp:
             Path(_mothra_tmp).unlink(missing_ok=True)
