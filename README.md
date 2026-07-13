@@ -163,6 +163,23 @@ python run_pipeline.py \
 | `--mothra-json PATH` | Mothra annotation JSON for this folio. Blacks out non-text regions before line segmentation. Omit to run without masking. |
 | `--padding PX` | Pixels added around each text bbox before masking (default 15). |
 
+**Programmatic usage:** masking is also available when calling `run()` directly
+as a library:
+
+```python
+from run_pipeline import run
+collection, manifest = run(
+    image_path="path/to/folio.jpg",
+    folio="012v",
+    source_id=599679,
+    mothra_json_path="path/to/folio.json",
+    padding=15,
+)
+```
+
+Pass `mothra_json_path=None` (the default) to skip masking. Callers that do not
+pass this argument — including `run_chain.py` — are unaffected.
+
 Compare results with `scripts/compare_runs.py`. Load all output JSONs into the
 Pipeline Inspector GUI for visual comparison.
 

@@ -214,6 +214,8 @@ def run(
     debug_ocr: bool = False,
     column_count: int | None = None,
     ocr_only_mode: bool = False,
+    mothra_json_path: str | None = None,
+    padding: int = 15,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
@@ -253,196 +255,228 @@ def run(
             word and syllable segmentation.  Set automatically by
             ``main()`` when neither ``--csv`` nor ``--source-id`` is
             given.
+        mothra_json_path: Path to a mothra annotation JSON. When
+            provided, blacks out non-text image regions before line
+            segmentation. Pass ``None`` (default) to skip masking —
+            behavior is unchanged for CLI and ``run_chain.py`` callers.
+        padding: Pixels added around each text bbox when masking
+            (default 15). Only used when ``mothra_json_path`` is given.
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level
         nodes and manifest is the node-label → Cantus-text mapping
         (empty dict in OCR-only mode).
     """
-    collection = Collection([image_path])
-    folio = folio or Path(image_path).stem
-
-    # Model selection: when --column-count is given the caller should pass the
-    # appropriate fine-tuned model via --segmentation-model. In future this
-    # block can insert hardwired per-column defaults when segmentation_model
-    # is None.
-    effective_model = segmentation_model
-
-    # Stage 1: Kraken BLLA line segmentation
-    logger.info("Stage 1: Kraken line segmentation")
-    collection = KrakenSegmentation(
-        device=device, model=effective_model
-    ).run(collection)
-    n_lines = sum(1 for _ in collection.active_leaves())
-    logger.info("  %d line nodes", n_lines)
-
-    # Stage 2: Column clustering — sort line nodes into reading order
-    logger.info("Stage 2: Column clustering")
-    page = next(iter(collection))
-    sorted_labels, column_count, split_x = cluster_columns(
-        line_nodes=list(page.children),
-        page_width=page.image.shape[1],
-        bimodal_threshold=column_bimodal_threshold,
-        forced_column_count=column_count,
-    )
-    logger.info("  %d column(s) detected", column_count)
-
-    # Span-fix: split any bboxes crossing the column divide before OCR
-    if column_count >= 2 and split_x is not None:
-        _split_spanning_nodes_in_tree(page, split_x)
-
-    # Stage 3: Kraken HTR text recognition
-    logger.info(
-        "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
-    )
-    collection = KrakenRecognition(
-        model=recognition_model, device=device
-    ).run(collection)
-
-    # Stage 4: Line fusion + chant allocation (or OCR-only)
-    node_ocr = {node.label: (node.text or "") for node in page.children}
-    fused_lines = fuse_colinear_segments(list(page.children), split_x)
-    left_column_count = sum(1 for f in fused_lines if f.column == 1)
-    logger.info(
-        "  Fused %d segments → %d logical lines",
-        sum(len(f.constituent_labels) for f in fused_lines),
-        len(fused_lines),
-    )
-    fused_sorted_labels = [f.label for f in fused_lines]
-    fused_ocr_texts = {
-        f.label: " ".join(node_ocr[lbl] for lbl in f.constituent_labels)
-        for f in fused_lines
-    }
-
-    # --- DEBUG OCR: print per-fused-line OCR transcripts ---
-    if debug_ocr:
-        print("\n=== DEBUG OCR: fused line transcripts ===")
-        for f in fused_lines:
-            print(f"  [{f.label}] {fused_ocr_texts[f.label]!r}")
-        print()
-    # --------------------------------------------------------
-
-    if ocr_only_mode:
-        logger.info("Stage 4: OCR-only — skipping Cantus alignment")
-        if debug_ocr:
-            print(
-                "[OCR-only mode] No CSV or source ID"
-                " — Cantus alignment skipped."
-            )
-            print(f"[OCR-only mode] Folio label: {folio}")
-            _ignored_flags = [
-                (prev_folio_state is not None, "--prev-folio-state"),
-                (folio_state_out is not None, "--folio-state-out"),
-            ]
-            for cond, name in _ignored_flags:
-                if cond:
-                    print(
-                        f"[OCR-only mode] Ignoring {name}"
-                        " (not applicable without Cantus data)"
-                    )
-            print()
-        manifest = {}
-    else:
-        if csv_path:
-            logger.info(
-                "Stage 4: NW allocation — loading local CSV from %s", csv_path
-            )
-            csv_rows = load_local_csv(csv_path)
-        else:
-            logger.info(
-                "Stage 4: NW allocation — fetching Cantus CSV for source %d",
-                source_id,
-            )
-            csv_rows = fetch_cantus_csv(source_id)
-        flat_text = build_flat_text_and_anchors(
-            csv_rows, folio,
-            prev_folio_state=prev_folio_state,
-        )
-
-        alloc_result = allocate_lines(
-            flat_text=flat_text,
-            sorted_labels=fused_sorted_labels,
-            ocr_texts=fused_ocr_texts,
-            column_count=column_count,
-            left_column_count=left_column_count,
-            snap_window=2,
-            force_window=10,  # force within_chant_7 up to ±10 words mid-chant
-            debug=debug_ocr,
-            fused_lines=fused_lines,
-            node_ocr=node_ocr,
-        )
-
-        # --- DEBUG OCR: print per-line NW alignment detail ---
-        if debug_ocr and alloc_result.debug_lines:
-            print("\n=== DEBUG NW ALIGNMENT ===")
-            for entry in alloc_result.debug_lines:
-                print(f"\n-- {entry['label']} --")
-                print(f"  OCR:      {entry['ocr']!r}")
-                print(f"  Assigned: {entry['assigned']!r}")
-                ptr_s = entry['pointer_start']
-                ptr_e = entry['pointer_end']
-                print(
-                    f"  Words:    [{ptr_s}..{ptr_e})"
-                    f" consumed={entry['consumed']}"
-                )
-                if entry['best_norm'] is not None:
-                    k_pre = entry['best_k_pre_snap']
-                    norm = entry['best_norm']
-                    print(
-                        f"  NW score: k={k_pre} (pre-snap),"
-                        f" norm={norm:.4f}"
-                    )
-                if entry['anchor_word'] is not None:
-                    nw_end = entry['pointer_start'] + entry['best_k_pre_snap']
-                    diff = abs(nw_end - entry['anchor_word'])
-                    print(
-                        f"  Anchor:   word {entry['anchor_word']}"
-                        f" ({entry['anchor_type']})"
-                        f", diff={diff}, snapped={entry['snapped']}"
-                        f", forced={entry['forced']}"
-                    )
-                if entry['alignment']:
-                    print("  Alignment:")
-                    for aln_line in entry['alignment'].splitlines():
-                        print(f"    {aln_line}")
-            print("=== END DEBUG ===\n")
-        # ------------------------------------------------------
-
-        manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
-        for lbl, text in alloc_result.constituent_overrides.items():
-            manifest[lbl] = text
-        for flag in alloc_result.flags:
-            logger.warning(
-                "Validation flag [%s]: %s", flag.flag_type, flag.detail
-            )
+    _original_image_path = image_path
+    _mothra_tmp: str | None = None
+    if mothra_json_path is not None:
+        from PIL import Image as _PILImage
+        from steps.mothra_mask import MothraImageMask as _MothraImageMask
+        _img = _PILImage.open(image_path).convert("RGB")
+        _masker = _MothraImageMask(mothra_json_path, padding_px=padding)
+        _masked = _masker.apply(_img)
         logger.info(
-            "  Manifest: %d / %d node labels assigned text",
-            sum(1 for v in manifest.values() if v),
-            len(manifest),
+            "Applied mothra mask: %d text bboxes, padding=%dpx",
+            len(_masker._bboxes), padding,
         )
-        if folio_state_out:
-            state = build_folio_state(
-                flat_text, alloc_result, source_id, folio
+        with tempfile.NamedTemporaryFile(
+            suffix=".png", delete=False
+        ) as _tmp:
+            _masked.save(_tmp.name)
+            _mothra_tmp = _tmp.name
+        image_path = _mothra_tmp
+    try:
+        collection = Collection([image_path])
+        folio = folio or Path(_original_image_path).stem
+
+        # Model selection: when --column-count is given the caller should
+        # pass the appropriate fine-tuned model via --segmentation-model.
+        # In future this block can insert hardwired per-column defaults
+        # when segmentation_model is None.
+        effective_model = segmentation_model
+
+        # Stage 1: Kraken BLLA line segmentation
+        logger.info("Stage 1: Kraken line segmentation")
+        collection = KrakenSegmentation(
+            device=device, model=effective_model
+        ).run(collection)
+        n_lines = sum(1 for _ in collection.active_leaves())
+        logger.info("  %d line nodes", n_lines)
+
+        # Stage 2: Column clustering — sort line nodes into reading order
+        logger.info("Stage 2: Column clustering")
+        page = next(iter(collection))
+        sorted_labels, column_count, split_x = cluster_columns(
+            line_nodes=list(page.children),
+            page_width=page.image.shape[1],
+            bimodal_threshold=column_bimodal_threshold,
+            forced_column_count=column_count,
+        )
+        logger.info("  %d column(s) detected", column_count)
+
+        # Span-fix: split any bboxes crossing the column divide before OCR
+        if column_count >= 2 and split_x is not None:
+            _split_spanning_nodes_in_tree(page, split_x)
+
+        # Stage 3: Kraken HTR text recognition
+        logger.info(
+            "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
+        )
+        collection = KrakenRecognition(
+            model=recognition_model, device=device
+        ).run(collection)
+
+        # Stage 4: Line fusion + chant allocation (or OCR-only)
+        node_ocr = {node.label: (node.text or "") for node in page.children}
+        fused_lines = fuse_colinear_segments(list(page.children), split_x)
+        left_column_count = sum(1 for f in fused_lines if f.column == 1)
+        logger.info(
+            "  Fused %d segments → %d logical lines",
+            sum(len(f.constituent_labels) for f in fused_lines),
+            len(fused_lines),
+        )
+        fused_sorted_labels = [f.label for f in fused_lines]
+        fused_ocr_texts = {
+            f.label: " ".join(node_ocr[lbl] for lbl in f.constituent_labels)
+            for f in fused_lines
+        }
+
+        # --- DEBUG OCR: print per-fused-line OCR transcripts ---
+        if debug_ocr:
+            print("\n=== DEBUG OCR: fused line transcripts ===")
+            for f in fused_lines:
+                print(f"  [{f.label}] {fused_ocr_texts[f.label]!r}")
+            print()
+        # --------------------------------------------------------
+
+        if ocr_only_mode:
+            logger.info("Stage 4: OCR-only — skipping Cantus alignment")
+            if debug_ocr:
+                print(
+                    "[OCR-only mode] No CSV or source ID"
+                    " — Cantus alignment skipped."
+                )
+                print(f"[OCR-only mode] Folio label: {folio}")
+                _ignored_flags = [
+                    (prev_folio_state is not None, "--prev-folio-state"),
+                    (folio_state_out is not None, "--folio-state-out"),
+                ]
+                for cond, name in _ignored_flags:
+                    if cond:
+                        print(
+                            f"[OCR-only mode] Ignoring {name}"
+                            " (not applicable without Cantus data)"
+                        )
+                print()
+            manifest = {}
+        else:
+            if csv_path:
+                logger.info(
+                    "Stage 4: NW allocation — loading local CSV from %s",
+                    csv_path,
+                )
+                csv_rows = load_local_csv(csv_path)
+            else:
+                logger.info(
+                    "Stage 4: NW allocation — fetching Cantus CSV"
+                    " for source %d",
+                    source_id,
+                )
+                csv_rows = fetch_cantus_csv(source_id)
+            flat_text = build_flat_text_and_anchors(
+                csv_rows, folio,
+                prev_folio_state=prev_folio_state,
             )
-            write_folio_state(state, folio_state_out)
+
+            alloc_result = allocate_lines(
+                flat_text=flat_text,
+                sorted_labels=fused_sorted_labels,
+                ocr_texts=fused_ocr_texts,
+                column_count=column_count,
+                left_column_count=left_column_count,
+                snap_window=2,
+                force_window=10,
+                debug=debug_ocr,
+                fused_lines=fused_lines,
+                node_ocr=node_ocr,
+            )
+
+            # --- DEBUG OCR: print per-line NW alignment detail ---
+            if debug_ocr and alloc_result.debug_lines:
+                print("\n=== DEBUG NW ALIGNMENT ===")
+                for entry in alloc_result.debug_lines:
+                    print(f"\n-- {entry['label']} --")
+                    print(f"  OCR:      {entry['ocr']!r}")
+                    print(f"  Assigned: {entry['assigned']!r}")
+                    ptr_s = entry['pointer_start']
+                    ptr_e = entry['pointer_end']
+                    print(
+                        f"  Words:    [{ptr_s}..{ptr_e})"
+                        f" consumed={entry['consumed']}"
+                    )
+                    if entry['best_norm'] is not None:
+                        k_pre = entry['best_k_pre_snap']
+                        norm = entry['best_norm']
+                        print(
+                            f"  NW score: k={k_pre} (pre-snap),"
+                            f" norm={norm:.4f}"
+                        )
+                    if entry['anchor_word'] is not None:
+                        nw_end = (
+                            entry['pointer_start'] + entry['best_k_pre_snap']
+                        )
+                        diff = abs(nw_end - entry['anchor_word'])
+                        print(
+                            f"  Anchor:   word {entry['anchor_word']}"
+                            f" ({entry['anchor_type']})"
+                            f", diff={diff}, snapped={entry['snapped']}"
+                            f", forced={entry['forced']}"
+                        )
+                    if entry['alignment']:
+                        print("  Alignment:")
+                        for aln_line in entry['alignment'].splitlines():
+                            print(f"    {aln_line}")
+                print("=== END DEBUG ===\n")
+            # --------------------------------------------------
+
+            manifest = _defuse_manifest(alloc_result.manifest, fused_lines)
+            for lbl, text in alloc_result.constituent_overrides.items():
+                manifest[lbl] = text
+            for flag in alloc_result.flags:
+                logger.warning(
+                    "Validation flag [%s]: %s", flag.flag_type, flag.detail
+                )
             logger.info(
-                "Folio state written to %s (fully_consumed=%s)",
-                folio_state_out,
-                state.fully_consumed,
+                "  Manifest: %d / %d node labels assigned text",
+                sum(1 for v in manifest.values() if v),
+                len(manifest),
             )
+            if folio_state_out:
+                state = build_folio_state(
+                    flat_text, alloc_result, source_id, folio
+                )
+                write_folio_state(state, folio_state_out)
+                logger.info(
+                    "Folio state written to %s (fully_consumed=%s)",
+                    folio_state_out,
+                    state.fully_consumed,
+                )
 
-    gt_lookup = make_manifest_lookup(manifest)
+        gt_lookup = make_manifest_lookup(manifest)
 
-    # Remaining steps — add new steps to this list as they are implemented:
-    remaining_steps = [
-        GroundTruthWordSegmentation(gt_lookup=gt_lookup),
-        SyllableSegmentation(),
-        # Export(...),              # add when implemented
-    ]
-    for step in remaining_steps:
-        collection = step.run(collection)
+        # Remaining steps — add new steps to this list as they are implemented:
+        remaining_steps = [
+            GroundTruthWordSegmentation(gt_lookup=gt_lookup),
+            SyllableSegmentation(),
+            # Export(...),              # add when implemented
+        ]
+        for step in remaining_steps:
+            collection = step.run(collection)
 
-    return collection, manifest
+        return collection, manifest
+    finally:
+        if _mothra_tmp:
+            Path(_mothra_tmp).unlink(missing_ok=True)
 
 
 def _build_pipeline_payload(
@@ -689,26 +723,17 @@ def main() -> None:
     if not Path(image_path).exists():
         parser.error(f"Image not found: {image_path}")
 
-    _mothra_tmp: str | None = None
+    mothra_json_for_run: str | None = None
     if args.mothra_json and not args.skip_masking:
-        from PIL import Image as _PILImage
-        from steps.mothra_mask import MothraImageMask as _MothraImageMask
-        mothra_json_path = str(Path(args.mothra_json).expanduser().resolve())
-        img = _PILImage.open(image_path).convert("RGB")
-        masker = _MothraImageMask(mothra_json_path, padding_px=args.padding)
-        masked_img = masker.apply(img)
-        logger.info(
-            "Applied mothra mask: %d text bboxes, padding=%dpx",
-            len(masker._bboxes), args.padding,
+        mothra_json_for_run = str(
+            Path(args.mothra_json).expanduser().resolve()
         )
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
-            masked_img.save(_tmp.name)
-            _mothra_tmp = _tmp.name
-        image_path = _mothra_tmp
     elif args.skip_masking:
         logger.info("--skip-masking set; text-region masking disabled.")
     else:
-        logger.info("No --mothra-json provided; running without text-region masking.")
+        logger.info(
+            "No --mothra-json provided; running without text-region masking."
+        )
 
     if ocr_only_mode:
         logger.info(
@@ -764,47 +789,49 @@ def main() -> None:
     )
 
     original_image_path = str(Path(args.image).expanduser().resolve())
-    try:
-        collection, manifest = run(
-            image_path=image_path,
-            folio=args.folio,
-            source_id=args.source_id,
-            csv_path=args.csv,
-            segmentation_model=args.segmentation_model,
-            recognition_model=recognition_model,
-            device=args.device,
-            column_bimodal_threshold=args.column_bimodal_threshold,
-            prev_folio_state=prev_state,
-            folio_state_out=args.folio_state_out,
-            debug_ocr=args.debug_ocr,
-            column_count=args.column_count,
-            ocr_only_mode=ocr_only_mode,
-        )
-        _summarise(collection)
+    collection, manifest = run(
+        image_path=image_path,
+        folio=args.folio,
+        source_id=args.source_id,
+        csv_path=args.csv,
+        segmentation_model=args.segmentation_model,
+        recognition_model=recognition_model,
+        device=args.device,
+        column_bimodal_threshold=args.column_bimodal_threshold,
+        prev_folio_state=prev_state,
+        folio_state_out=args.folio_state_out,
+        debug_ocr=args.debug_ocr,
+        column_count=args.column_count,
+        ocr_only_mode=ocr_only_mode,
+        mothra_json_path=mothra_json_for_run,
+        padding=args.padding,
+    )
+    _summarise(collection)
 
-        effective_mei_json = args.mei_json or (
-            str(out_dir / f"{output_stem}.json") if output_stem else None
-        )
-        effective_export_json = args.export_json
+    effective_mei_json = args.mei_json or (
+        str(out_dir / f"{output_stem}.json") if output_stem else None
+    )
+    effective_export_json = args.export_json
 
-        if effective_export_json or effective_mei_json:
-            resolved_folio = output_stem or args.folio or Path(original_image_path).stem
-            _mode = "ocr_only" if ocr_only_mode else "cantus_aligned"
-            payload = _build_pipeline_payload(
-                collection, original_image_path, manifest,
-                folio=resolved_folio, mode=_mode,
+    if effective_export_json or effective_mei_json:
+        resolved_folio = (
+            output_stem or args.folio or Path(original_image_path).stem
+        )
+        _mode = "ocr_only" if ocr_only_mode else "cantus_aligned"
+        payload = _build_pipeline_payload(
+            collection, original_image_path, manifest,
+            folio=resolved_folio, mode=_mode,
+        )
+
+        if effective_export_json:
+            with open(effective_export_json, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            logger.info(
+                "Exported pipeline JSON to %s", effective_export_json
             )
 
-            if effective_export_json:
-                with open(effective_export_json, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
-                logger.info("Exported pipeline JSON to %s", effective_export_json)
-
-            if effective_mei_json:
-                _write_mei_json(payload, effective_mei_json)
-    finally:
-        if _mothra_tmp:
-            Path(_mothra_tmp).unlink(missing_ok=True)
+        if effective_mei_json:
+            _write_mei_json(payload, effective_mei_json)
 
 
 if __name__ == "__main__":

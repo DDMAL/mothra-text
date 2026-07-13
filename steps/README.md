@@ -272,8 +272,9 @@ Requires `volpiano-display-utilities` (`pip install volpiano-display-utilities`)
 ### `MothraImageMask(mothra_json_path, padding_px=25)`
 
 Produces a masked version of a folio image that shows only mothra classId-1 (text)
-regions; all other pixels are set to black. Used by `run_pipeline.py` when
-`--mothra-json` is provided.
+regions; all other pixels are set to black. Invoked by `run_pipeline.run()` when
+`mothra_json_path` is provided (either via the `--mothra-json` CLI flag or passed
+directly by a library caller such as the landing page backend).
 
 - **`apply(pil_image) → PIL.Image`** — for each classId-1 bbox `[x, y, w, h]` in the
   mothra JSON, paints a white rectangle expanded by `padding_px` on all sides (clamped
