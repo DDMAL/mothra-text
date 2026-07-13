@@ -97,7 +97,6 @@ def _run_one(
             segmentation_model=args.segmentation_model,
             recognition_model=recognition_model,
             device=args.device,
-            line_offset=0,
             column_bimodal_threshold=args.column_bimodal_threshold,
             prev_folio_state=prev_state,
             folio_state_out=tmp_path,

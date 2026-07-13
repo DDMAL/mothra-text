@@ -84,7 +84,6 @@ mothra integration approaches against the baseline.
 python scripts/compare_runs.py \
     --label baseline ~/Downloads/DDMAL/baseline_12v.json \
     --label masked   ~/Downloads/DDMAL/mothra_masked_12v.json \
-    --label union    ~/Downloads/DDMAL/mothra_union_12v.json \
     --output ~/Downloads/DDMAL/mothra_comparison_report_YYYY-MM-DD.txt
 ```
 

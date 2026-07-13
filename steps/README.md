@@ -283,29 +283,6 @@ regions; all other pixels are set to black. Used by `run_pipeline.py` when
 
 ---
 
-## `mothra_union.py`
-
-### `MothraUnionStep(mothra_json_path, iou_threshold=0.3, min_width=50, overlap_threshold=0.5)`
-
-Injects mothra classId-1 (text) line detections that Kraken BLLA missed into the
-HTRflow collection. Deprecated; was used in the union approach (Approach B) which
-has been removed from the main pipeline.
-
-- **`run(collection) → Collection`**:
-  1. Groups mothra word-level bboxes into line-level bboxes using the same y-overlap
-     greedy merge logic as `fuse_colinear_segments()` (merge when overlap ≥
-     `overlap_threshold × min_height`, default 50%).
-  2. For each grouped mothra line: compute IoU against all existing Kraken line nodes.
-  3. Inject as a new `_MothraLineNode` only when max IoU < `iou_threshold` (default 0.3)
-     **and** the merged bbox width ≥ `min_width` pixels (default 50px, guards against
-     single-glyph false positives that would consume Cantus words in NW alignment).
-  4. Calls `page.relabel()` after injection to keep node labels consistent.
-
-**`_MothraLineNode`** is a synthetic `ImageNode` subclass (mirrors `_HtrflowSplitNode`
-in `run_pipeline.py`) that stores its bbox and image crop directly.
-
----
-
 ## `gt_manifest.py`
 
 Builds the `gt_lookup` callable from a Cantus CSV export.

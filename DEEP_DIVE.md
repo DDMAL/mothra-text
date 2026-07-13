@@ -1,7 +1,8 @@
 # mothra-text Deep Dive Report
 
 **Repo:** `/Users/cassiebastress/Documents/DDMAL/line-seg-eval`
-**Date written:** 2026-06-18
+**Date written:** 2026-06-18  
+**Last updated:** 2026-07-13
 
 ---
 
@@ -15,20 +16,41 @@ Two older sub-projects (YOLO/RTMDet segmentation model comparison and PyLaia HTR
 
 | Artifact | Entry point | Output |
 |---|---|---|
-| End-to-end pipeline | `run_pipeline.py` | JSON + optional MEI JSON |
+| End-to-end pipeline (single folio) | `run_pipeline.py` | MEI JSON + optional Pipeline Inspector JSON |
+| Multi-folio chaining wrapper | `run_chain.py` | Same outputs per folio, FolioState passed automatically |
 | Pipeline Inspector GUI | `gui/` (React/Vite/OpenSeadragon) | Browser app, deployed to GitHub Pages |
 | PAGE XML Viewer | `page_viewer.py` | Desktop Tkinter app |
-| Utility scripts | `scripts/` | Various conversions |
+| Utility scripts | `scripts/` | Various conversions and diagnostics |
+| User documentation | `docs/` | `user_guide.md`, `user_decision_tree.md` |
 
 ---
 
 ## 2. Pipeline Stages
 
-`run_pipeline.py::run()` executes six conceptual stages in sequence. Each stage operates on an HTRflow `Collection` object (a tree of image nodes) or produces a data structure consumed by the next stage.
+`run_pipeline.py::run()` executes six conceptual stages in sequence. A pre-processing Stage 0 (text-region masking) runs in `main()` before `run()` is called, so it is transparent to `run()` itself.
+
+### Stage 0 — Mothra Text-Region Masking (pre-processing in `main()`)
+
+**Input:** raw folio image + mothra annotation JSON  
+**Output:** masked image written to a temp PNG; the temp path is passed as `image_path` to `run()`
+
+When `--mothra-json` is provided and `--skip-masking` is not set, `main()` applies `MothraImageMask` (from `steps/mothra_mask.py`) before calling `run()`. The masker:
+
+1. Reads the mothra annotation JSON and extracts all classId-1 (text) bboxes.
+2. Builds a black canvas the same size as the folio image.
+3. Paints a white rectangle around each bbox, expanded by `--padding` pixels (default 15) on all sides.
+4. Composites the original image through the mask — only text regions remain visible; everything else is black.
+5. Saves the result to a temporary PNG; `main()` passes its path to `run()` and deletes it after `run()` returns.
+
+**Purpose:** BLLA over-segments on chant manuscripts partly because music notation (neumes, staves) creates spurious baselines. Blacking out non-text regions before segmentation suppresses the majority of false detections.
+
+**Masking is not available in `run_chain.py`** — the chaining wrapper calls `run()` directly and does not apply masking. This is a known gap and will be added in a future iteration.
+
+When `--mothra-json` is absent, the pipeline runs on the raw image unchanged. `--skip-masking` disables masking even when `--mothra-json` is present (useful for diagnosing whether masking is the cause of missed or false lines).
 
 ### Stage 1 — Kraken BLLA Line Segmentation (`KrakenSegmentation`)
 
-**Input:** raw folio image (JPEG/PNG/TIFF)  
+**Input:** raw or masked folio image (JPEG/PNG/TIFF)  
 **Output:** HTRflow `Collection` with line-level `SegmentNode` children
 
 `KrakenSegmentation` wraps Kraken's BLLA (Baseline Line Detection Algorithm) as an HTRflow `PipelineStep`. For each page in the collection:
@@ -40,7 +62,7 @@ Two older sub-projects (YOLO/RTMDet segmentation model comparison and PyLaia HTR
 
 **Custom model:** if `--segmentation-model` is passed, the model is loaded at construction time. `.safetensors` uses `load_safetensors`; `.mlmodel` (CoreML) uses `vgsl.TorchVGSLModel.load_model`. When `None`, Kraken's built-in BLLA model is used.
 
-**Known issue with BLLA on chant manuscripts:** BLLA was trained on text manuscripts and tends to over-segment — drawing multiple bounding boxes around what is physically one text line because neume notation interrupts the text baseline. Stage 2 corrects this.
+**Known issue with BLLA on chant manuscripts:** BLLA was trained on text manuscripts and tends to over-segment — drawing multiple bounding boxes around what is physically one text line because neume notation interrupts the text baseline. Stage 0 masking reduces this; Stage 2 fusion corrects remaining fragments.
 
 ### Stage 2 — Column Clustering and Co-linear Fusion (`cluster_columns` + `fuse_colinear_segments`)
 
@@ -97,9 +119,11 @@ For each active leaf node:
 
 **Known issue:** Tridis was trained on baseline segmentation crops. The mothra-text pipeline feeds it bbox crops (Kraken BLLA produces polygons but the node image is a bbox-extracted region). This type mismatch causes a "severely degraded performance" warning from Kraken. A chant-specific HTR model trained on bbox crops would resolve this.
 
-### Stage 4 — NW Chant Allocator (`allocate_lines`)
+### Stage 4 — NW Chant Allocator (`allocate_lines`) or OCR-Only Mode
 
-This is the most complex stage. See Section 5 for a deep dive. At a high level:
+**OCR-only mode** is triggered automatically when neither `--source-id` nor `--csv` is given. In this mode Stage 4 is skipped entirely: `manifest` is set to `{}` and all lines fall through to OCR-based word segmentation in Stage 5. The pipeline JSON is written with `"mode": "ocr_only"` instead of `"mode": "cantus_aligned"`. `--prev-folio-state` and `--folio-state-out` are ignored and a warning is logged.
+
+In **Cantus-aligned mode**, this is the most complex stage. See Section 5 for a deep dive. At a high level:
 
 1. `build_flat_text_and_anchors()` flattens all chant CSV rows for the folio into a single ordered word list, extracting volpiano break positions as `Anchor` objects.
 2. `fuse_colinear_segments()` produces fused OCR texts (concatenated constituent texts).
@@ -138,7 +162,8 @@ Non-final syllables carry a trailing hyphen in the text field (e.g. `["do-", "mi
 
 ```
 line-seg-eval/
-├── run_pipeline.py             # main pipeline entry point
+├── run_pipeline.py             # main pipeline entry point (single folio)
+├── run_chain.py                # multi-folio chaining wrapper
 ├── run_kraken.py               # standalone BLLA runner + visualizer
 ├── page_viewer.py              # PAGE XML viewer (Tkinter desktop app)
 │
@@ -150,7 +175,12 @@ line-seg-eval/
 │   ├── syllable_segmentation.py           # stage 6
 │   ├── kraken_segmentation.py             # stage 1
 │   ├── kraken_recognition.py              # stage 3
+│   ├── mothra_mask.py                     # stage 0 (text-region masking)
 │   └── README.md
+│
+├── docs/                       # user-facing documentation
+│   ├── user_guide.md           # troubleshooting and option reference
+│   └── user_decision_tree.md   # GUI flag mapping + Mermaid decision tree
 │
 ├── gui/                        # Pipeline Inspector browser app
 │   ├── src/
@@ -162,9 +192,13 @@ line-seg-eval/
 │   └── README.md
 │
 ├── scripts/                    # utility / conversion scripts
+│   ├── run_mothra_inference.py # run YOLOv11 mothra models → annotation JSON
 │   ├── mothra_to_page.py       # Mothra Annotator JSON → PAGE XML
 │   ├── convert_to_mei_input.py # pipeline JSON → MEI Text Alignment JSON
+│   ├── compare_runs.py         # compare pipeline JSONs across approaches
+│   ├── visualize_mothra.py     # overlay mothra bboxes on folio image
 │   ├── debug_column_detection.py
+│   └── README.md
 │
 ├── experiments/                # comparative research (not the main pipeline)
 │   ├── README.md
@@ -172,8 +206,6 @@ line-seg-eval/
 │   ├── run_all.py              # runs all three models
 │   ├── pipelines/              # htrflow YAML configs
 │   └── pylaia_baseline/        # PyLaia HTR experiments
-│       ├── pylaia_recognition.py
-│       └── {pylaia_himanis,pylaia_home_alcar}/
 │
 └── tests/                      # pytest suite (200+ tests)
 ```
@@ -308,6 +340,8 @@ After NW allocation, the manifest has fused labels (`fused_0`, `fused_1`, …). 
 
 `FolioState` carries `remaining_words` (post-77 continuation) and `last_chant_sequence` across folio runs. Written to a JSON sidecar via `write_folio_state()`; read back via `read_folio_state()`. Used to chain pipeline runs across consecutive folios of the same manuscript.
 
+For manual runs, `--folio-state-out` / `--prev-folio-state` manage this by hand. For automated batch processing, `run_chain.py` handles it transparently (see Section 8).
+
 ---
 
 ## 6. Key Data Structures
@@ -350,7 +384,8 @@ class FlatTextData:
 
 ```json
 {
-  "folio": "168v_masked",
+  "folio": "CH-E_611_001r",
+  "mode": "cantus_aligned",
   "image_width": 2480,
   "image_height": 3508,
   "lines": [
@@ -364,7 +399,7 @@ class FlatTextData:
           "label": "region0_line0_word0",
           "text": "Alleluia",
           "bbox": [x0, y0, x1, y1],
-          "source": "gt",            // "gt" | "fallback"
+          "source": "gt",
           "syllables": [
             {
               "label": "region0_line0_word0_syl0",
@@ -379,7 +414,34 @@ class FlatTextData:
 }
 ```
 
+**`mode`** is `"cantus_aligned"` when a Cantus source was supplied or `"ocr_only"` when neither `--source-id` nor `--csv` was given. The GUI and downstream tools use this field to adjust rendering and processing behaviour.
+
+**`folio`** is the regularized identifier when `--output-dir` is used (e.g. `CH-E_611_001r`), derived from the Cantus CSV's RISM code and shelfmark. When `--export-json` is used without `--output-dir`, it defaults to the image filename stem.
+
 The `source` field is `"gt"` when the manifest has a non-empty truthy value for that line's label, and `"fallback"` when the line fell through to OCR-based word segmentation.
+
+### Mothra annotation JSON schema
+
+Produced by `scripts/run_mothra_inference.py` and consumed by `MothraImageMask` and the upstream masking step:
+
+```json
+{
+  "imageName": "001r.jpg",
+  "imageWidth": 2480,
+  "imageHeight": 3508,
+  "annotations": [
+    {
+      "id": 1,
+      "classId": 1,
+      "bbox": [x, y, width, height],
+      "confidence": 0.87,
+      "timestamp": "2026-07-06T..."
+    }
+  ]
+}
+```
+
+`classId` values: `1` = text, `2` = music, `3` = staves. `MothraImageMask` uses only classId-1 bboxes. `bbox` is in `[x_topleft, y_topleft, width, height]` format (absolute pixels).
 
 ---
 
@@ -406,7 +468,86 @@ The SVG `pointer-events: none` allows OSD pan/zoom to work through the overlay. 
 
 ---
 
-## 8. Tools and External Dependencies
+## 8. Multi-Folio Chaining (`run_chain.py`)
+
+`run_chain.py` is a wrapper around `run_pipeline.run()` that processes a sequence of consecutive folios in order, passing `FolioState` between runs automatically so the user does not need to manage `--folio-state-out` / `--prev-folio-state` sidecar files by hand.
+
+**Key behaviours:**
+
+- Requires `--images` and `--folios` lists of equal length (≥2 folios required; use `run_pipeline.py` directly for a single folio).
+- `--source-id` or `--csv` is required (mutually exclusive); OCR-only mode is not available in `run_chain.py`.
+- `--export-json` accepts one output path per folio (same order as `--images`).
+- `--output-dir PATH` auto-names MEI JSON outputs as `{RISM-code}_{shelfmark}_{folio}.json` using `make_output_stem()`. Explicit per-folio paths via `--mei-json` take precedence over `--output-dir`.
+- `--folio-states-dir PATH` saves intermediate `FolioState` JSON files as `state_{folio}.json` for post-run inspection. Omit to discard intermediate states.
+- If any folio fails, the chain aborts and reports how many folios completed before the failure.
+
+**Internal flow** per folio:
+1. Call `run_pipeline.run()` with the current `prev_state`.
+2. Write optional Pipeline Inspector JSON and MEI JSON.
+3. Read the `FolioState` from a temp file (written by `run()`).
+4. Log continuation word count and `fully_consumed` status.
+5. Optionally copy temp state to `folio_states_dir`.
+6. Pass `next_state` as `prev_state` for the next iteration.
+
+**Masking gap:** `run_chain.py` does not support `--mothra-json`, so text-region masking is not available in chained runs. This will be added in a future iteration.
+
+---
+
+## 9. Mothra Text-Detection Integration
+
+### `MothraImageMask` (`steps/mothra_mask.py`)
+
+The masking approach pre-processes the folio image so Kraken BLLA only sees text regions. It does not modify the `Collection` tree or inject nodes — it produces a masked image that is passed to `KrakenSegmentation` in place of the original.
+
+```python
+masker = MothraImageMask(mothra_json_path, padding_px=15)
+masked_pil = masker.apply(original_pil_image)
+```
+
+The `padding_px` parameter (CLI default: 15, class default: 25) controls how much each text bbox is expanded before masking. Larger values merge nearby word-level detections into line-width strips that Kraken can detect as full lines. Smaller values reduce bleed into adjacent music rows but may leave gaps within long text lines. The optimal value depends on manuscript layout — tightly packed manuscripts may need `--padding 10`; manuscripts with wider word spacing may need `--padding 20`.
+
+### `scripts/run_mothra_inference.py`
+
+Produces mothra annotation JSONs from raw folio images using YOLOv11 models hosted on HuggingFace Hub. This is the upstream step that generates the JSON consumed by `MothraImageMask`.
+
+**Usage:**
+```
+python scripts/run_mothra_inference.py \
+    --images 001r.jpg 001v.jpg 002r.jpg \
+    --out-dir ~/Downloads/mothra_jsons/ \
+    --conf 0.25
+```
+
+**What it runs:**
+- `text_music_detector` model → classId 1 (text regions), classId 2 (music regions)
+- `stave_detector` model → classId 3 (stave regions)
+
+Models are downloaded from HuggingFace Hub on first run (requires a HF token at `~/.cache/huggingface/token`). Images where an output JSON already exists are skipped.
+
+### `scripts/visualize_mothra.py`
+
+Overlays mothra detection bboxes on a folio image for visual inspection. Useful for checking mothra JSON quality before running the full pipeline.
+
+```
+python scripts/visualize_mothra.py mothra.json folio.jpg output.jpg
+```
+
+Color coding: text (classId 1) = green, music (classId 2) = blue, staves (classId 3) = red.
+
+### `scripts/compare_runs.py`
+
+Compares pipeline export JSONs across different runs (e.g. baseline vs. masked) and prints a table of line counts and word-source statistics (GT vs. fallback words).
+
+```
+python scripts/compare_runs.py \
+    --label baseline ~/Downloads/DDMAL/baseline_12v.json \
+    --label masked   ~/Downloads/DDMAL/mothra_masked_12v.json \
+    --output ~/Downloads/DDMAL/mothra_comparison_report_2026-07-13.txt
+```
+
+---
+
+## 10. Tools and External Dependencies
 
 | Dependency | What it does | Where used |
 |---|---|---|
@@ -414,19 +555,20 @@ The SVG `pointer-events: none` allows OSD pan/zoom to work through the overlay. 
 | `htrflow` | Collection/SegmentNode tree; Result objects; PipelineStep base | all steps |
 | `biopython` | Needleman-Wunsch alignment via `Bio.Align.PairwiseAligner` | `nw_chant_allocator.py` |
 | `volpiano-display-utilities` | Latin syllabification | `syllable_segmentation.py`, `nw_chant_allocator.py` |
-| `platformdirs` | Cross-platform user data directory (transitive dep of htrmopo) | `run_pipeline.py` |
+| `platformdirs` | Cross-platform user data directory (transitive dep of htrmopo) | `run_pipeline.py`, `run_chain.py` |
 | `numpy` | 1D coverage profile array; convolution smoothing | `column_clustering.py` |
 | `opencv-python (cv2)` | BGR↔RGB conversion for PIL/Kraken | `KrakenSegmentation`, `KrakenRecognition` |
-| `Pillow (PIL)` | Image format for Kraken; also used by `page_viewer.py` | multiple |
+| `Pillow (PIL)` | Image masking (`MothraImageMask`); Kraken input; `page_viewer.py` | `mothra_mask.py`, multiple |
+| `ultralytics` | YOLOv11 inference for mothra text-region detection | `scripts/run_mothra_inference.py` only |
 | `htrmopo` | Model download/caching (used via CLI only) | CLI workflow |
 
-**Standard library:** `argparse`, `csv`, `io`, `json`, `logging`, `pathlib`, `re`, `statistics`, `unicodedata`, `urllib.request`.
+**Standard library:** `argparse`, `csv`, `io`, `json`, `logging`, `pathlib`, `re`, `shutil`, `statistics`, `tempfile`, `unicodedata`, `urllib.request`.
 
 **GUI deps (npm):** React, TypeScript, Vite, Tailwind CSS, OpenSeadragon, `@types/openseadragon`.
 
 ---
 
-## 9. Notable Design Decisions
+## 11. Notable Design Decisions
 
 ### HTRflow as scaffolding, not as the core
 
@@ -436,6 +578,18 @@ HTRflow provides the `Collection` tree and step protocol but contributes zero do
 
 The earlier approach (`build_page_manifest()` in `gt_manifest.py`) split chant text directly by volpiano `7` markers and zipped the result with node labels. This fails when chants start mid-line (previous chant ends partway through a physical line) — the zip assumes a clean one-to-one correspondence. The NW allocator avoids this assumption entirely: it uses OCR text as evidence to determine where each line starts and ends in the flat word sequence.
 
+### Masking before segmentation, not injection after
+
+An earlier approach (`MothraUnionStep`, now removed) injected mothra-detected lines that Kraken missed into the HTRflow collection after segmentation. This was fragile: injected nodes had no polygon, required deduplication against Kraken nodes via IoU, and produced uneven line coverage that confused NW alignment. The current approach masks the image before Kraken runs. Kraken then detects only text regions and produces polygons for all of them — the tree is uniformly populated with real Kraken nodes.
+
+### Masking in `main()`, not in `run()`
+
+`MothraImageMask` writes a temp PNG and passes its path to `run()` as a regular `image_path`. This keeps `run()` free of masking concerns and lets `run_chain.py` call `run()` without needing to know about masking. The temp file is always cleaned up in a `finally` block.
+
+### OCR-only mode as the default when no Cantus data is given
+
+Rather than requiring the user to pass an explicit `--ocr-only` flag, the mode is inferred: if neither `--source-id` nor `--csv` is given, Cantus alignment is skipped automatically. This makes the CLI easier to use for quick inspection runs while keeping the full Cantus-aligned mode as the documented primary workflow.
+
 ### Fused-line NW, constituent-label manifest
 
 NW alignment runs on fused lines (one logical text line = potentially multiple BLLA segments). The fused-line OCR text is the concatenation of constituent OCR texts. After allocation, `_defuse_manifest` distributes words back to constituent labels proportionally by pixel width. This means the fused grouping is transparent to all downstream steps (Stages 5 and 6 operate on original node labels).
@@ -444,19 +598,23 @@ NW alignment runs on fused lines (one logical text line = potentially multiple B
 
 `_build_pipeline_payload` marks a word as `source="gt"` using `manifest.get(line_node.label)` (falsy check), not `line_node.label in manifest` (key existence). These diverge for lines that received an empty-string GT assignment (e.g. a line with no text in the Cantus CSV). `GroundTruthWordSegmentation` also uses `if not gt_text:` to trigger fallback. The two checks must agree — an empty-string assignment means no GT text was available, so the word should be `"fallback"`.
 
+### Regularized output naming via `make_output_stem()`
+
+`--output-dir` triggers `make_output_stem(csv_rows, folio)` which extracts the RISM code and shelfmark from the Cantus CSV (fields already downloaded for alignment) and constructs a standardized filename like `CH-E_611_001r.json`. This avoids ad-hoc naming and keeps MEI JSON outputs directly consumable by downstream tools without renaming.
+
 ### Apple Silicon stub pattern
 
 Every step that inherits from `htrflow.pipeline.steps` wraps the import in `try/except ImportError` and defines a local stub. This is not defensive programming for general failure — it is specifically for the Apple Silicon mmcv crash. The stubs are load-time shims, not runtime fallbacks. They should never be removed until HTRflow stops importing mmcv at module level.
 
 ---
 
-## 10. Known Limitations and Future Work
+## 12. Known Limitations and Future Work
 
 | Area | Issue | Path forward |
 |---|---|---|
 | HTR model | Tridis was trained on baseline crops; we feed bbox crops → "severely degraded performance" warning | Train a chant-specific HTR model on bbox crops |
-| Segmentation | BLLA over-segments on neumes; co-linear fusion is a post-hoc fix | Fine-tune BLLA on chant manuscripts (Kraken BLLA fine-tuning setup exists in the repo) |
+| Segmentation | BLLA over-segments on neumes; co-linear fusion is a post-hoc fix; masking helps but doesn't eliminate the problem | Fine-tune BLLA on chant manuscripts (Kraken BLLA fine-tuning setup exists in the repo) |
 | NW with no volpiano | Folio-start location is approximate; works at line granularity | No clear path; volpiano is the ground-truth structural signal |
-| Multi-folio runs | Requires manually chaining `--folio-state-out` / `--prev-folio-state` | Could be automated in a batch runner |
+| Masking in run_chain.py | `run_chain.py` does not support `--mothra-json`; text-region masking is unavailable for multi-folio batch runs | Add `--mothra-jsons` list to `run_chain.py` mirroring the `--images` list |
 | Word geometry | Character-proportional bbox distribution ignores actual character widths | Would require OCR character-level bounding boxes from Kraken (possible but not currently extracted) |
 | GUI | Deployed build is static; updating requires `npm run build` + push | Already automated via GitHub Actions for `gui/` changes |

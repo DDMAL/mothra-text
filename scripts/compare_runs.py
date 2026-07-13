@@ -8,7 +8,6 @@ Usage
 python scripts/compare_runs.py \\
     --label baseline ~/Downloads/DDMAL/baseline_1v.json \\
     --label masked   ~/Downloads/DDMAL/mothra_masked_1v.json \\
-    --label union    ~/Downloads/DDMAL/mothra_union_1v.json \\
     --output ~/Downloads/DDMAL/mothra_comparison_report_2026-07-03.txt
 """
 
