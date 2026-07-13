@@ -12,7 +12,8 @@ python run_chain.py \\
     --images 006r.jpg 007v.jpg 008r.jpg \\
     --folios 006r 007v 008r \\
     --source-id 123672 \\
-    --export-json ~/Downloads/006r.json ~/Downloads/007v.json ~/Downloads/008r.json
+    --export-json ~/Downloads/006r.json ~/Downloads/007v.json ~/Downloads/008r.json \\
+    --mothra-jsons-dir ~/Downloads/mothra_jsons/
 
 Add --folio-states-dir /tmp/states/ to keep intermediate FolioState JSON files
 for post-run inspection. Add --debug-ocr for per-line OCR and NW alignment detail.
@@ -61,6 +62,11 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             parser.error(f"Image not found: {p}")
     if args.csv and not Path(args.csv).expanduser().exists():
         parser.error(f"CSV not found: {args.csv}")
+    if (args.mothra_jsons_dir
+            and not Path(args.mothra_jsons_dir).expanduser().exists()):
+        parser.error(
+            f"--mothra-jsons-dir not found: {args.mothra_jsons_dir}"
+        )
 
 
 def _run_one(
@@ -74,6 +80,8 @@ def _run_one(
     folio_label: "str",
     folio_states_dir: "str | None",
     recognition_model: "str | None",
+    mothra_json_path: "str | None",
+    padding: int,
     args: argparse.Namespace,
     run: "callable",
     export_json: "callable",
@@ -102,6 +110,8 @@ def _run_one(
             folio_state_out=tmp_path,
             debug_ocr=args.debug_ocr,
             column_count=args.column_count,
+            mothra_json_path=mothra_json_path,
+            padding=padding,
         )
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)
@@ -182,6 +192,24 @@ def main() -> None:
                         help="Print per-line OCR transcripts and NW alignment detail "
                              "for every folio.")
     parser.add_argument(
+        "--mothra-jsons-dir", metavar="PATH", default=None,
+        help="Directory containing mothra annotation JSONs named "
+             "{image_stem}.json (one per folio). When provided, each "
+             "folio is masked before line segmentation if its JSON is "
+             "found; folios without a matching JSON run unmasked. "
+             "Produced by: scripts/run_mothra_inference.py --out-dir.",
+    )
+    parser.add_argument(
+        "--padding", type=int, default=15, metavar="PX",
+        help="Pixels added around each text bbox when masking "
+             "(default 15). Only used when --mothra-jsons-dir is given.",
+    )
+    parser.add_argument(
+        "--skip-masking", action="store_true", default=False,
+        help="Skip text-region masking even if --mothra-jsons-dir is "
+             "provided.",
+    )
+    parser.add_argument(
         "--output-dir", metavar="PATH", default=None,
         help="Directory for auto-named MEI JSON outputs. Each folio is written as "
              "{RISM-code}_{shelfmark}_{folio}.json (e.g. CH-E_611_001r.json). "
@@ -242,6 +270,12 @@ def main() -> None:
         mei_paths = [None] * n
         folio_labels = list(args.folios)
 
+    mothra_dir = (
+        Path(args.mothra_jsons_dir).expanduser().resolve()
+        if args.mothra_jsons_dir and not args.skip_masking
+        else None
+    )
+
     logger = logging.getLogger(__name__)
     completed = 0
     prev_state = None
@@ -249,6 +283,18 @@ def main() -> None:
     for i, (image_path, folio, out_json, mei_path, folio_label) in enumerate(
         zip(images, args.folios, export_paths, mei_paths, folio_labels)
     ):
+        mothra_json_path: "str | None" = None
+        if mothra_dir is not None:
+            candidate = mothra_dir / f"{Path(image_path).stem}.json"
+            if candidate.exists():
+                mothra_json_path = str(candidate)
+            else:
+                logger.warning(
+                    "No mothra JSON found for %s in %s; running unmasked",
+                    Path(image_path).name,
+                    mothra_dir,
+                )
+
         try:
             prev_state = _run_one(
                 idx=i,
@@ -261,6 +307,8 @@ def main() -> None:
                 folio_label=folio_label,
                 folio_states_dir=args.folio_states_dir,
                 recognition_model=recognition_model,
+                mothra_json_path=mothra_json_path,
+                padding=args.padding,
                 args=args,
                 run=run,
                 export_json=export_json,

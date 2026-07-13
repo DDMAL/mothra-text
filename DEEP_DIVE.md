@@ -27,26 +27,37 @@ Two older sub-projects (YOLO/RTMDet segmentation model comparison and PyLaia HTR
 
 ## 2. Pipeline Stages
 
-`run_pipeline.py::run()` executes six conceptual stages in sequence. A pre-processing Stage 0 (text-region masking) runs in `main()` before `run()` is called, so it is transparent to `run()` itself.
+`run_pipeline.py::run()` executes six conceptual stages in sequence. Stage 0 (text-region masking) is handled at the top of `run()` itself, so it is available to all callers — CLI, `run_chain.py`, and the landing page backend.
 
-### Stage 0 — Mothra Text-Region Masking (pre-processing in `main()`)
+### Stage 0 — Mothra Text-Region Masking (inside `run()`)
 
-**Input:** raw folio image + mothra annotation JSON  
-**Output:** masked image written to a temp PNG; the temp path is passed as `image_path` to `run()`
+**Input:** raw folio image + optional mothra annotation JSON path  
+**Output:** masked image written to a temp PNG; `run()` uses it for Stage 1, then deletes it
 
-When `--mothra-json` is provided and `--skip-masking` is not set, `main()` applies `MothraImageMask` (from `steps/mothra_mask.py`) before calling `run()`. The masker:
+When `mothra_json_path` is passed to `run()`, masking is applied at the very start of `run()` using `MothraImageMask` (from `steps/mothra_mask.py`):
 
 1. Reads the mothra annotation JSON and extracts all classId-1 (text) bboxes.
 2. Builds a black canvas the same size as the folio image.
-3. Paints a white rectangle around each bbox, expanded by `--padding` pixels (default 15) on all sides.
+3. Paints a white rectangle around each bbox, expanded by `padding` pixels (default 15) on all sides.
 4. Composites the original image through the mask — only text regions remain visible; everything else is black.
-5. Saves the result to a temporary PNG; `main()` passes its path to `run()` and deletes it after `run()` returns.
+5. Saves the result to a temp PNG and passes it as `image_path` to `KrakenSegmentation`. A `try/finally` block ensures the temp file is deleted even if the pipeline raises an exception.
 
 **Purpose:** BLLA over-segments on chant manuscripts partly because music notation (neumes, staves) creates spurious baselines. Blacking out non-text regions before segmentation suppresses the majority of false detections.
 
-**Masking is not available in `run_chain.py`** — the chaining wrapper calls `run()` directly and does not apply masking. This is a known gap and will be added in a future iteration.
+Masking lives inside `run()` so every caller — `main()`, `run_chain.py`, and the landing page — gets masking by simply passing `mothra_json_path`. When `mothra_json_path=None` (the default), the pipeline runs on the raw image unchanged. `--skip-masking` in the CLI prevents the resolved path from being passed to `run()`.
 
-When `--mothra-json` is absent, the pipeline runs on the raw image unchanged. `--skip-masking` disables masking even when `--mothra-json` is present (useful for diagnosing whether masking is the cause of missed or false lines).
+In the CLI (`main()`), `--mothra-json PATH` resolves and passes the path; `--skip-masking` suppresses it. In `run_chain.py`, `--mothra-jsons-dir DIR` looks for `{image_stem}.json` per folio and passes the path when found. Library callers (e.g. the landing page backend) pass it directly:
+
+```python
+from run_pipeline import run
+collection, manifest = run(
+    image_path="path/to/folio.jpg",
+    folio="012v",
+    source_id=599679,
+    mothra_json_path="path/to/folio.json",
+    padding=15,
+)
+```
 
 ### Stage 1 — Kraken BLLA Line Segmentation (`KrakenSegmentation`)
 
@@ -479,17 +490,19 @@ The SVG `pointer-events: none` allows OSD pan/zoom to work through the overlay. 
 - `--export-json` accepts one output path per folio (same order as `--images`).
 - `--output-dir PATH` auto-names MEI JSON outputs as `{RISM-code}_{shelfmark}_{folio}.json` using `make_output_stem()`. Explicit per-folio paths via `--mei-json` take precedence over `--output-dir`.
 - `--folio-states-dir PATH` saves intermediate `FolioState` JSON files as `state_{folio}.json` for post-run inspection. Omit to discard intermediate states.
+- `--mothra-jsons-dir PATH` enables text-region masking for the chain. For each folio, `run_chain.py` looks for `{image_stem}.json` in the directory and passes the path to `run()` when found. A missing JSON for any folio produces a warning and that folio runs unmasked. The directory is typically the `--out-dir` of a prior `scripts/run_mothra_inference.py` run.
+- `--padding PX` (default 15) controls bbox expansion during masking, passed through to `run()`.
+- `--skip-masking` suppresses masking even when `--mothra-jsons-dir` is provided.
 - If any folio fails, the chain aborts and reports how many folios completed before the failure.
 
 **Internal flow** per folio:
-1. Call `run_pipeline.run()` with the current `prev_state`.
-2. Write optional Pipeline Inspector JSON and MEI JSON.
-3. Read the `FolioState` from a temp file (written by `run()`).
-4. Log continuation word count and `fully_consumed` status.
-5. Optionally copy temp state to `folio_states_dir`.
-6. Pass `next_state` as `prev_state` for the next iteration.
-
-**Masking gap:** `run_chain.py` does not support `--mothra-json`, so text-region masking is not available in chained runs. This will be added in a future iteration.
+1. Resolve the mothra JSON path for this folio from `--mothra-jsons-dir` (or `None` if absent or missing).
+2. Call `run_pipeline.run()` with `prev_state` and `mothra_json_path` — masking is applied inside `run()`.
+3. Write optional Pipeline Inspector JSON and MEI JSON.
+4. Read the `FolioState` from a temp file (written by `run()`).
+5. Log continuation word count and `fully_consumed` status.
+6. Optionally copy temp state to `folio_states_dir`.
+7. Pass `next_state` as `prev_state` for the next iteration.
 
 ---
 
@@ -582,9 +595,9 @@ The earlier approach (`build_page_manifest()` in `gt_manifest.py`) split chant t
 
 An earlier approach (`MothraUnionStep`, now removed) injected mothra-detected lines that Kraken missed into the HTRflow collection after segmentation. This was fragile: injected nodes had no polygon, required deduplication against Kraken nodes via IoU, and produced uneven line coverage that confused NW alignment. The current approach masks the image before Kraken runs. Kraken then detects only text regions and produces polygons for all of them — the tree is uniformly populated with real Kraken nodes.
 
-### Masking in `main()`, not in `run()`
+### Masking inside `run()`, not in callers
 
-`MothraImageMask` writes a temp PNG and passes its path to `run()` as a regular `image_path`. This keeps `run()` free of masking concerns and lets `run_chain.py` call `run()` without needing to know about masking. The temp file is always cleaned up in a `finally` block.
+`MothraImageMask` writes a temp PNG, substitutes it for `image_path` during Stage 1, then deletes it in a `try/finally` block. Because masking lives inside `run()`, every caller — `main()`, `run_chain.py`, and the landing page — gets masking for free by passing `mothra_json_path`. No caller needs to manage temp files or know about PIL.
 
 ### OCR-only mode as the default when no Cantus data is given
 
@@ -615,6 +628,5 @@ Every step that inherits from `htrflow.pipeline.steps` wraps the import in `try/
 | HTR model | Tridis was trained on baseline crops; we feed bbox crops → "severely degraded performance" warning | Train a chant-specific HTR model on bbox crops |
 | Segmentation | BLLA over-segments on neumes; co-linear fusion is a post-hoc fix; masking helps but doesn't eliminate the problem | Fine-tune BLLA on chant manuscripts (Kraken BLLA fine-tuning setup exists in the repo) |
 | NW with no volpiano | Folio-start location is approximate; works at line granularity | No clear path; volpiano is the ground-truth structural signal |
-| Masking in run_chain.py | `run_chain.py` does not support `--mothra-json`; text-region masking is unavailable for multi-folio batch runs | Add `--mothra-jsons` list to `run_chain.py` mirroring the `--images` list |
 | Word geometry | Character-proportional bbox distribution ignores actual character widths | Would require OCR character-level bounding boxes from Kraken (possible but not currently extracted) |
 | GUI | Deployed build is static; updating requires `npm run build` + push | Already automated via GitHub Actions for `gui/` changes |
