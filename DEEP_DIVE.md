@@ -6,6 +6,48 @@
 
 ---
 
+## Table of Contents
+
+1. [Purpose and Big Picture](#1-purpose-and-big-picture)
+2. [Pipeline Stages](#2-pipeline-stages)
+   - [Stage 0 — Mothra Text-Region Masking](#stage-0--mothra-text-region-masking-inside-run)
+   - [Stage 1 — Kraken BLLA Line Segmentation](#stage-1--kraken-blla-line-segmentation-krakensegmentation)
+   - [Stage 2 — Column Clustering and Co-linear Fusion](#stage-2--column-clustering-and-co-linear-fusion-cluster_columns--fuse_colinear_segments)
+   - [Stage 3 — Kraken HTR Text Recognition](#stage-3--kraken-htr-text-recognition-krakenrecognition)
+   - [Stage 4 — NW Chant Allocator or OCR-Only Mode](#stage-4--nw-chant-allocator-allocate_lines-or-ocr-only-mode)
+   - [Stage 5 — GT Word Segmentation](#stage-5--gt-word-segmentation-groundtruthwordsegmentation)
+   - [Stage 6 — Syllable Segmentation](#stage-6--syllable-segmentation-syllablesegmentation)
+3. [File Structure](#3-file-structure)
+4. [Framework Connections](#4-framework-connections)
+   - [HTRflow](#htrflow)
+   - [Kraken](#kraken)
+   - [Bio.Align (Biopython)](#bioalign-biopython)
+   - [volpiano-display-utilities](#volpiano-display-utilities)
+   - [platformdirs](#platformdirs)
+   - [htrmopo](#htrmopo)
+5. [NW Chant Allocator — Deep Dive](#5-nw-chant-allocator--deep-dive)
+   - [5a. build_flat_text_and_anchors()](#5a-build_flat_text_and_anchors)
+   - [5b. allocate_lines() — the NW allocation loop](#5b-allocate_lines--the-nw-allocation-loop)
+   - [5c. _defuse_manifest()](#5c-_defuse_manifest)
+   - [5d. Folio state persistence](#5d-folio-state-persistence)
+6. [Key Data Structures](#6-key-data-structures)
+   - [HTRflow tree hierarchy](#htrflow-tree-hierarchy)
+   - [FlatTextData](#flattextdata)
+   - [Pipeline JSON output schema](#pipeline-json-output-schema)
+   - [Mothra annotation JSON schema](#mothra-annotation-json-schema)
+7. [GUI Architecture](#7-gui-architecture)
+8. [Multi-Folio Chaining (run_chain.py)](#8-multi-folio-chaining-run_chainpy)
+9. [Mothra Text-Detection Integration](#9-mothra-text-detection-integration)
+   - [MothraImageMask](#motherimagemask-stepsmothra_maskpy)
+   - [scripts/run_mothra_inference.py](#scriptsrun_mothra_inferencepy)
+   - [scripts/visualize_mothra.py](#scriptsvisualize_mothrapy)
+   - [scripts/compare_runs.py](#scriptscompare_runspy)
+10. [Tools and External Dependencies](#10-tools-and-external-dependencies)
+11. [Notable Design Decisions](#11-notable-design-decisions)
+12. [Known Limitations and Future Work](#12-known-limitations-and-future-work)
+
+---
+
 ## 1. Purpose and Big Picture
 
 The repo implements an end-to-end pipeline that takes a photograph of a medieval chant manuscript folio and produces syllable-level bounding boxes annotated with Cantus Database text. The primary output is a JSON file consumable by the Pipeline Inspector GUI (and separately by the MEI encoding workflow). The end goal is aligning the neume notation in manuscript images with the syllabic text of the chant, enabling musicological research and digital edition work.
