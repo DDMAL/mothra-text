@@ -51,7 +51,7 @@ By default the pipeline uses Kraken's built-in BLLA model for line segmentation.
 
 ### Recognition / OCR model
 
-By default the pipeline uses the Tridis Medieval/EarlyModern model if installed. To use a different HTR model, pass it via `--recognition-model`. To skip recognition entirely (produce word/syllable geometry without text), use `--stub-mode`.
+By default the pipeline uses the Tridis Medieval/EarlyModern model if installed via htrmopo (`python -m htrmopo get 10.5281/zenodo.7899855`). To use a different HTR model, pass it via `--recognition-model`. If no model is found and `--stub-mode` is not given, the pipeline exits with an error. To skip recognition entirely (produce word/syllable geometry without text), use `--stub-mode`.
 
 ---
 

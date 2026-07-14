@@ -58,10 +58,11 @@ python run_pipeline.py \
 
 `--source-id` and `--csv` are mutually exclusive; exactly one is required.
 
-`--recognition-model` is optional. Omitting it runs in **stub mode**: OCR text is empty,
-NW alignment uses volpiano anchors only, and word boxes are placed from Cantus ground
-truth alone. Stub mode is useful for testing segmentation and JSON export without a
-trained model.
+`--recognition-model` is optional if the Tridis model is installed via htrmopo. Omitting
+`--recognition-model` without `--stub-mode` causes the pipeline to exit with an error if
+no model is found. Use `--stub-mode` to intentionally skip OCR: text is left empty, NW
+alignment uses volpiano anchors only, and word boxes are placed from Cantus ground truth
+alone. Stub mode is useful for testing segmentation and JSON export without a trained model.
 
 ---
 

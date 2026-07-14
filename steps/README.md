@@ -90,20 +90,21 @@ folio, improving both reading order and NW word-count allocation.
 
 ## `kraken_recognition.py`
 
-### `KrakenRecognition(model=None, device="cpu")`
+### `KrakenRecognition(model=None, device="cpu", allow_stub=False)`
 
 HTRflow pipeline step for per-line text recognition using a Kraken HTR model.
 
 - **Default model**: `run_pipeline.py` automatically uses the Tridis model
   (`Tridis_Medieval_EarlyModern.mlmodel`) if it is installed via htrmopo. Install with:
-  `python -m htrmopo get 10.5281/zenodo.7899855`
-- **Stub mode** (`model=None`): logs a WARNING and sets empty text on all line nodes.
-  The pipeline still runs to completion, allowing segmentation and JSON export to be
-  tested without a model. Trigger explicitly with `--stub-mode`; occurs automatically
-  with a warning if the Tridis model is not installed and no `--recognition-model` is given.
+  `python -m htrmopo get 10.5281/zenodo.7899855`. If no model is found and `--stub-mode`
+  was not given, the CLI exits with an error.
+- **Stub mode** (`model=None, allow_stub=True`): logs a WARNING and sets empty text on
+  all line nodes. The pipeline still runs to completion, allowing segmentation and JSON
+  export to be tested without a model. Must be triggered explicitly with `--stub-mode`.
+  Passing `model=None` without `allow_stub=True` raises a `ValueError`.
 - **Custom model** (`--recognition-model PATH`): loads any Kraken-compatible model
-  (local `.mlmodel` path). Runs `kraken.rpred.rpred` on each line crop. Recognized text
-  and per-character confidence scores are stored on the node.
+  (local `.mlmodel` path or HuggingFace model ID). Runs `kraken.rpred.rpred` on each
+  line crop. Recognized text and per-character confidence scores are stored on the node.
 
 Kraken imports are lazy (inside `run()`), so stub mode never requires Kraken to be
 importable.

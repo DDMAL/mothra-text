@@ -79,6 +79,7 @@ default if installed via htrmopo. To install:
 ```bash
 python -m htrmopo get 10.5281/zenodo.7899855
 ```
+If no model is found and `--stub-mode` is not given, the pipeline exits with an error.
 Use `--stub-mode` to skip recognition entirely (pipeline still produces GT word/syllable geometry).
 
 **Multi-folio runs (manual):**
@@ -294,12 +295,6 @@ conda activate line-seg-eval
 pip install htrflow kraken biopython volpiano-display-utilities
 ```
 
-> **Python environment note:** Always use the full path to the conda Python — pyenv
-> intercepts the bare `python` command and picks the wrong interpreter:
-> ```bash
-> /Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python run_pipeline.py ...
-> ```
-
 For experiment-specific dependencies (OpenMMLab stack for RTMDet, PyLaia environment),
 see [`experiments/README.md`](experiments/README.md).
 
@@ -308,5 +303,6 @@ see [`experiments/README.md`](experiments/README.md).
 ## Tests
 
 ```bash
-/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python -m pytest tests/ -v
+conda activate line-seg-eval
+python -m pytest tests/ -v
 ```

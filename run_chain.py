@@ -238,10 +238,14 @@ def main() -> None:
         recognition_model = args.recognition_model
         if recognition_model is None:
             print(
-                "Warning: Tridis recognition model not found. Running in stub mode.\n"
-                "Install with: python -m htrmopo get 10.5281/zenodo.7899855",
+                "Error: no recognition model found and --stub-mode was not given.\n"
+                "Install the Tridis model: "
+                "python -m htrmopo get 10.5281/zenodo.7899855\n"
+                "Or pass a model via:       --recognition-model PATH\n"
+                "Or skip recognition with:  --stub-mode",
                 file=sys.stderr,
             )
+            sys.exit(1)
 
     if args.folio_states_dir:
         Path(args.folio_states_dir).expanduser().mkdir(parents=True, exist_ok=True)

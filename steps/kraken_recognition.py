@@ -52,16 +52,30 @@ class KrakenRecognition(_PipelineStepBase):
             ``"cuda"``.  Defaults to ``"cpu"``.
     """
 
-    def __init__(self, model: str | None = None, device: str = "cpu") -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        device: str = "cpu",
+        allow_stub: bool = False,
+    ) -> None:
         self.model = model
         self.device = device
+        self.allow_stub = allow_stub
 
     def run(self, collection: Collection) -> Collection:
         if self.model is None:
+            if not self.allow_stub:
+                raise ValueError(
+                    "KrakenRecognition: no recognition model provided "
+                    "and stub mode was not explicitly requested.\n"
+                    "  • Install the Tridis model: "
+                    "python -m htrmopo get 10.5281/zenodo.7899855\n"
+                    "  • Or pass a model:           --recognition-model PATH\n"
+                    "  • Or opt into stub mode:     --stub-mode"
+                )
             logger.warning(
-                "KrakenRecognition: no model provided (model=None); "
-                "setting empty text on all line nodes. "
-                "Pass --recognition-model to enable HTR."
+                "KrakenRecognition: stub mode active (allow_stub=True); "
+                "setting empty text on all line nodes."
             )
             nodes = list(collection.active_leaves())
             if not nodes:

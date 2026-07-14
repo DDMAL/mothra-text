@@ -230,8 +230,10 @@ def run(
             source_id).  Omit together with ``source_id`` to run in
             OCR-only mode.
         recognition_model: HuggingFace model ID or local path to a
-            Kraken ``.mlmodel`` file.  Pass ``None`` (default) to run
-            in stub mode (empty text, pipeline still completes).
+            Kraken ``.mlmodel`` file.  Pass ``None`` to run in explicit
+            stub mode (all lines receive empty text, pipeline still
+            completes).  The CLI exits with an error if no model is
+            available and ``--stub-mode`` was not given.
         device: Kraken inference device (``"cpu"`` or ``"cuda"``).
         column_bimodal_threshold: Maximum ratio of the coverage-profile
             valley to the smaller column peak for the valley to be
@@ -323,7 +325,9 @@ def run(
             "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
         )
         collection = KrakenRecognition(
-            model=recognition_model, device=device
+            model=recognition_model,
+            device=device,
+            allow_stub=(recognition_model is None),
         ).run(collection)
 
         # Stage 4: Line fusion + chant allocation (or OCR-only)
@@ -776,11 +780,14 @@ def main() -> None:
         recognition_model = args.recognition_model
         if recognition_model is None:
             print(
-                "Warning: Tridis recognition model not found."
-                " Running in stub mode.\n"
-                "Install with: python -m htrmopo get 10.5281/zenodo.7899855",
+                "Error: no recognition model found and --stub-mode was not given.\n"
+                "Install the Tridis model: "
+                "python -m htrmopo get 10.5281/zenodo.7899855\n"
+                "Or pass a model via:       --recognition-model PATH\n"
+                "Or skip recognition with:  --stub-mode",
                 file=sys.stderr,
             )
+            sys.exit(1)
 
     prev_state = (
         read_folio_state(args.prev_folio_state)
