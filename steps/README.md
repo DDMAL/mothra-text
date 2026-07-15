@@ -96,7 +96,7 @@ HTRflow pipeline step for per-line text recognition using a Kraken HTR model.
 
 - **Default model**: `run_pipeline.py` automatically uses the Tridis model
   (`Tridis_Medieval_EarlyModern.mlmodel`) if it is installed via htrmopo. Install with:
-  `python -m htrmopo get 10.5281/zenodo.7899855`. If no model is found and `--stub-mode`
+  `python -m htrmopo get 10.5281/zenodo.10788591`. If no model is found and `--stub-mode`
   was not given, the CLI exits with an error.
 - **Stub mode** (`model=None, allow_stub=True`): logs a WARNING and sets empty text on
   all line nodes. The pipeline still runs to completion, allowing segmentation and JSON

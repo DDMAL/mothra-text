@@ -168,7 +168,7 @@ For each active leaf node:
 
 **Stub mode:** when `allow_stub=True` and `model=None`, all lines receive empty text and a WARNING is logged. Stub mode must be explicitly requested via `--stub-mode`; if no model is available and `--stub-mode` was not given, the CLI exits with an error rather than silently producing empty output.
 
-**Tridis model:** the default recognition model is `Tridis_Medieval_EarlyModern.mlmodel`, a medieval/early-modern HTR model distributed via htrmopo (DOI `10.5281/zenodo.7899855`). At startup, `_find_tridis_model()` uses `platformdirs.user_data_dir("htrmopo")` to locate the model cache and globs for the filename across the UUID-named subdirectory. This is portable across machines.
+**Tridis model:** the default recognition model is `Tridis_Medieval_EarlyModern.mlmodel`, a medieval/early-modern HTR model distributed via htrmopo (DOI `10.5281/zenodo.10788591`). At startup, `_find_tridis_model()` uses `platformdirs.user_data_dir("htrmopo")` to locate the model cache and globs for the filename across the UUID-named subdirectory. This is portable across machines.
 
 **Known issue:** Tridis was trained on baseline segmentation crops. The mothra-text pipeline feeds it bbox crops (Kraken BLLA produces polygons but the node image is a bbox-extracted region). This type mismatch causes a "severely degraded performance" warning from Kraken. A chant-specific HTR model trained on bbox crops would resolve this.
 

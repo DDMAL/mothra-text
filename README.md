@@ -77,7 +77,7 @@ python run_pipeline.py \
 **Recognition model:** The Tridis model (`Tridis_Medieval_EarlyModern.mlmodel`) is used by
 default if installed via htrmopo. To install:
 ```bash
-python -m htrmopo get 10.5281/zenodo.7899855
+python -m htrmopo get 10.5281/zenodo.10788591
 ```
 If no model is found and `--stub-mode` is not given, the pipeline exits with an error.
 Use `--stub-mode` to skip recognition entirely (pipeline still produces GT word/syllable geometry).

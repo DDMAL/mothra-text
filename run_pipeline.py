@@ -642,7 +642,7 @@ def main() -> None:
         help=(
             "Local path to a Kraken .mlmodel recognition model. "
             "Defaults to the Tridis model if installed via htrmopo "
-            "(install: python -m htrmopo get 10.5281/zenodo.7899855). "
+            "(install: python -m htrmopo get 10.5281/zenodo.10788591). "
             "Use --stub-mode to skip recognition entirely."
         ),
     )
@@ -782,7 +782,7 @@ def main() -> None:
             print(
                 "Error: no recognition model found and --stub-mode was not given.\n"
                 "Install the Tridis model: "
-                "python -m htrmopo get 10.5281/zenodo.7899855\n"
+                "python -m htrmopo get 10.5281/zenodo.10788591\n"
                 "Or pass a model via:       --recognition-model PATH\n"
                 "Or skip recognition with:  --stub-mode",
                 file=sys.stderr,

@@ -69,7 +69,7 @@ class KrakenRecognition(_PipelineStepBase):
                     "KrakenRecognition: no recognition model provided "
                     "and stub mode was not explicitly requested.\n"
                     "  • Install the Tridis model: "
-                    "python -m htrmopo get 10.5281/zenodo.7899855\n"
+                    "python -m htrmopo get 10.5281/zenodo.10788591\n"
                     "  • Or pass a model:           --recognition-model PATH\n"
                     "  • Or opt into stub mode:     --stub-mode"
                 )
