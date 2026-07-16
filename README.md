@@ -291,9 +291,12 @@ See [DDMAL/ddmal_hfsync](https://github.com/DDMAL/ddmal_hfsync) for setup instru
 ```bash
 conda create -n line-seg-eval python=3.10 -y
 conda activate line-seg-eval
-
-pip install htrflow kraken biopython volpiano-display-utilities
+pip install -r requirements.txt
 ```
+
+All dependencies (including transitive) are pinned in `requirements.txt`. To update
+after adding a new package, re-run `pip freeze > requirements.txt` in the active conda
+env and commit the result.
 
 For experiment-specific dependencies (OpenMMLab stack for RTMDet, PyLaia environment),
 see [`experiments/README.md`](experiments/README.md).

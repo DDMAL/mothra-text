@@ -1,0 +1,12 @@
+[project]
+name = "line-seg-eval"
+version = "0.1.0"
+description = "Pipeline for medieval chant manuscript layout analysis and HTR"
+authors = [
+    {name = "Cassia Bastress", email = "cassia.bastress@mail.mcgill.ca"}
+]
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
