@@ -301,20 +301,28 @@ def build_flat_text_and_anchors(
         ))
         has_continuation = True
     elif infer_continuation:
-        # Scan all CSV rows for the last row from a preceding folio
-        # with a 77 break — its post-77 words belong to this folio.
+        # Check only the immediately preceding folio for a 77 break.
+        # Searching all preceding folios would incorrectly grab a stale
+        # 77 from much earlier in the manuscript when intervening folios
+        # have no 77 (or when the CSV has out-of-order folio entries).
         target_key = _folio_sort_key(folio)
-        prev_77_rows = [
-            r for r in csv_rows
+        preceding_keys = [
+            _folio_sort_key(r.get("folio", ""))
+            for r in csv_rows
             if _folio_sort_key(r.get("folio", "")) < target_key
-            and "77" in (r.get("volpiano") or "")
             and r.get("mode", "").strip() != "*"
         ]
+        prev_77_rows = []
+        if preceding_keys:
+            prev_folio_key = max(preceding_keys)
+            prev_77_rows = [
+                r for r in csv_rows
+                if _folio_sort_key(r.get("folio", "")) == prev_folio_key
+                and "77" in (r.get("volpiano") or "")
+                and r.get("mode", "").strip() != "*"
+            ]
+            prev_77_rows.sort(key=lambda r: int(r.get("sequence") or 0))
         if prev_77_rows:
-            prev_77_rows.sort(key=lambda r: (
-                _folio_sort_key(r.get("folio", "")),
-                int(r.get("sequence") or 0),
-            ))
             carry_row = prev_77_rows[-1]
             raw_carry = (
                 carry_row.get("fulltext_ms")

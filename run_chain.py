@@ -21,10 +21,43 @@ for post-run inspection. Add --debug-ocr for per-line OCR and NW alignment detai
 
 import argparse
 import logging
+import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+
+def _parse_folio_id(folio_id: str) -> "tuple[int | None, str | None]":
+    """Parse folio_id into (number, side) for contiguity checking.
+
+    Handles zero-padded (001r), non-padded (1r), and number-only (1) forms.
+    Returns (None, None) if the format is unrecognised.
+    """
+    m = re.match(r"^(\d+)([rv]?)$", folio_id.lower())
+    if not m:
+        return None, None
+    return int(m.group(1)), m.group(2) or None
+
+
+def _are_contiguous(a: str, b: str) -> bool:
+    """Return True if folio b directly follows folio a in manuscript sequence.
+
+    NOTE: This is a heuristic. If it fails for an unusual naming convention,
+    consider always running with prev_folio_state=None (no chaining) or
+    ensuring all input folios are contiguous.
+    """
+    num_a, side_a = _parse_folio_id(a)
+    num_b, side_b = _parse_folio_id(b)
+    if num_a is None or num_b is None:
+        return False
+    if side_a is None and side_b is None:
+        return num_b == num_a + 1
+    if side_a == "r" and side_b == "v":
+        return num_a == num_b
+    if side_a == "v" and side_b == "r":
+        return num_b == num_a + 1
+    return False
 
 
 def _find_tridis_model() -> "str | None":
@@ -283,10 +316,19 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     completed = 0
     prev_state = None
+    prev_folio = None
 
     for i, (image_path, folio, out_json, mei_path, folio_label) in enumerate(
         zip(images, args.folios, export_paths, mei_paths, folio_labels)
     ):
+        if prev_folio is not None and not _are_contiguous(prev_folio, folio):
+            logger.warning(
+                "Folio %s does not follow %s — resetting chain state",
+                folio,
+                prev_folio,
+            )
+            prev_state = None
+
         mothra_json_path: "str | None" = None
         if mothra_dir is not None:
             candidate = mothra_dir / f"{Path(image_path).stem}.json"
@@ -320,6 +362,7 @@ def main() -> None:
                 build_pipeline_payload=_build_pipeline_payload,
                 write_mei_json=_write_mei_json,
             )
+            prev_folio = folio
             completed += 1
         except Exception as exc:
             logger.error(

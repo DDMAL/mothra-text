@@ -95,7 +95,9 @@ python run_pipeline.py --image 007v.jpg --folio 007v --source-id 123672 \
 
 **Multi-folio runs (automated):** Use `run_chain.py` to chain any number of consecutive
 folios in a single command — intermediate `FolioState` sidecar files are managed
-automatically:
+automatically. If the provided folios are not actually consecutive pages (recto→verso→next
+recto), `run_chain.py` logs a warning and resets the carry-over state rather than silently
+passing stale words into the next folio's alignment:
 
 ```bash
 # Auto-named MEI JSON outputs (recommended for batch use)
