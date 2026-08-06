@@ -200,6 +200,19 @@ def _defuse_manifest(fused_manifest, fused_lines):
     return manifest
 
 
+def _music_overlap_ratio(node_bbox, music_box: list[float]) -> float:
+    lx0, ly0 = node_bbox.xmin, node_bbox.ymin
+    lx1, ly1 = node_bbox.xmax, node_bbox.ymax
+    mx0, my0, mx1, my1 = music_box
+    ix0, iy0 = max(lx0, mx0), max(ly0, my0)
+    ix1, iy1 = min(lx1, mx1), min(ly1, my1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    intersection = (ix1 - ix0) * (iy1 - iy0)
+    line_area = (lx1 - lx0) * (ly1 - ly0)
+    return intersection / line_area if line_area > 0 else 0.0
+
+
 def run(
     image_path: str,
     folio: str | None = None,
@@ -216,6 +229,8 @@ def run(
     ocr_only_mode: bool = False,
     mothra_json_path: str | None = None,
     padding: int = 15,
+    music_boxes: list[list[float]] | None = None,
+    music_overlap_threshold: float = 0.30,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
@@ -263,6 +278,16 @@ def run(
             behavior is unchanged for CLI and ``run_chain.py`` callers.
         padding: Pixels added around each text bbox when masking
             (default 15). Only used when ``mothra_json_path`` is given.
+        music_boxes: List of music-region bounding boxes
+            ``[x0, y0, x1, y1]`` in absolute pixels. When provided, any
+            line node whose bbox overlaps a music box by more than
+            ``music_overlap_threshold`` is dropped **before** Stage 4
+            (NW allocation), so it cannot consume a GT slot. Pass
+            ``None`` (default) to skip this filter — behaviour is
+            unchanged for CLI and ``run_chain.py`` callers.
+        music_overlap_threshold: Minimum overlap ratio (intersection /
+            line area) for a line to be considered overlapping a music
+            box (default 0.30).
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level
@@ -329,6 +354,31 @@ def run(
             device=device,
             allow_stub=(recognition_model is None),
         ).run(collection)
+
+        # Pre-Stage-4: drop lines overlapping music regions before NW allocation
+        if music_boxes:
+            kept, dropped_nodes = [], []
+            for node in page.children:
+                if any(_music_overlap_ratio(node.bbox, mb) > music_overlap_threshold
+                       for mb in music_boxes):
+                    dropped_nodes.append(node)
+                    logger.info(
+                        "folio %s: pre-NW drop — line bbox [%d,%d,%d,%d]"
+                        " overlaps music region",
+                        folio or "?",
+                        node.bbox.xmin, node.bbox.ymin,
+                        node.bbox.xmax, node.bbox.ymax,
+                    )
+                else:
+                    kept.append(node)
+            page.children = kept
+            collection._music_filter_dropped = [
+                {"bbox": [n.bbox.xmin, n.bbox.ymin, n.bbox.xmax, n.bbox.ymax],
+                 "text": n.text or ""}
+                for n in dropped_nodes
+            ]
+        else:
+            collection._music_filter_dropped = []
 
         # Stage 4: Line fusion + chant allocation (or OCR-only)
         node_ocr = {node.label: (node.text or "") for node in page.children}

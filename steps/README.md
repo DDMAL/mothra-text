@@ -9,11 +9,15 @@ on medieval chant manuscripts.
 ```
 KrakenSegmentation  →  cluster_columns
                     →  KrakenRecognition
+                    →  [pre-NW music filter]   # drops lines overlapping music regions
                     →  fuse_colinear_segments
                     →  allocate_lines (NW chant allocator)
                     →  GroundTruthWordSegmentation
                     →  SyllableSegmentation
 ```
+
+The pre-NW music filter is not a separate step class — it runs inline in `run_pipeline.run()`
+when `music_boxes` is provided. See `run_pipeline.py` and the root `README.md` (§1c) for details.
 
 ---
 

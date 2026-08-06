@@ -183,6 +183,32 @@ collection, manifest = run(
 Pass `mothra_json_path=None` (the default) to skip masking. Callers that do not
 pass this argument — including `run_chain.py` — are unaffected.
 
+### 1c. Pre-NW music region filter
+
+When the production pipeline supplies music-region bounding boxes (the YOLO-detected
+stave/neume areas), `run()` can drop any BLLA-detected line that substantially overlaps
+a music region **before** Stage 4 (NW chant allocation). This prevents spurious BLLA
+baselines near music staves from consuming GT word slots and shifting all subsequent
+lines off by one.
+
+This filter is not exposed as a CLI flag — it is only used by the mothra API layer
+(`text-service/main.py`), which passes the music boxes from the YOLO annotation. CLI
+runs and `run_chain.py` pass `music_boxes=None` (the default) and are unaffected.
+
+**Programmatic usage:**
+
+```python
+from run_pipeline import run
+collection, manifest = run(
+    image_path="path/to/folio.jpg",
+    folio="012v",
+    source_id=599679,
+    music_boxes=[[x0, y0, x1, y1], ...],   # absolute pixel coords
+    music_overlap_threshold=0.30,           # optional, default 0.30
+)
+# Lines dropped before NW are on collection._music_filter_dropped
+```
+
 Compare results with `scripts/compare_runs.py`. Load all output JSONs into the
 Pipeline Inspector GUI for visual comparison.
 
