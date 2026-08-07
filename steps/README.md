@@ -156,8 +156,18 @@ Builds `FlatTextData` from a Cantus CSV:
    - `77` → `page_break_77` anchor + truncation (post-77 words go to next folio via
      `continuation_words`)
    - `777` → `column_break_777` anchor
-3. When `infer_continuation=True` (default) and no `prev_folio_state` is given,
-   automatically finds the immediately preceding folio by CSV ordering (not all
+3. When a `prev_folio_state` IS given, it is authoritative even if its
+   `remaining_words` is empty (the previous folio's chant genuinely terminated
+   there, `fully_consumed=True`) — `infer_continuation` is never consulted in
+   that case. An explicit "nothing to carry over" from the actual run is real
+   information, not an absence of it; falling through to the CSV-guess below
+   just because the list happens to be empty would silently overwrite that
+   answer with a stale one (this is exactly what happened when a phantom
+   folio like "003r" — fully consumed, correctly leaving nothing over — was
+   followed by a real folio that still picked up an earlier folio's leftover
+   continuation via the CSV-scan below).
+4. Only when no `prev_folio_state` is given at all, and `infer_continuation=True`
+   (default), automatically finds the immediately preceding folio by CSV ordering (not all
    preceding history — an intervening folio with no `77` would otherwise let a stale
    break from much earlier get misattributed) and, if its last row's volpiano has `77`,
    prepends the post-77 words as a virtual ChantSpan (sequence 0). This means a single
@@ -170,7 +180,7 @@ Builds `FlatTextData` from a Cantus CSV:
    (`run_chain.py`, `text-service`'s batch endpoint) pass `infer_continuation=False`
    explicitly whenever their own contiguity check fails, rather than relying on this
    CSV-only heuristic to catch that case.
-4. `line_offset` skips the first N `within_chant_7` anchors, setting `initial_pointer`
+5. `line_offset` skips the first N `within_chant_7` anchors, setting `initial_pointer`
    accordingly (for images that are crops starting partway through a folio).
 
 ### `allocate_lines(flat_text, sorted_labels, ocr_texts, column_count=1, ...)`

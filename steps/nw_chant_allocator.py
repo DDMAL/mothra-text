@@ -265,17 +265,21 @@ def build_flat_text_and_anchors(
     Args:
         csv_rows:           All rows from a Cantus CSV (any folio).
         folio:              Folio string to filter rows (e.g. "006r").
-        prev_folio_state:   FolioState from the previous folio run.
-                            If provided, its remaining_words (post-77
-                            continuation) are prepended to flat_text
-                            before this folio's rows. Takes priority
-                            over infer_continuation.
-        infer_continuation: When True (default) and prev_folio_state
-                            is None, scan csv_rows for the last row
-                            from any preceding folio with a 77 break
-                            and prepend its post-77 words. Handles the
-                            common case where the previous folio was
-                            not run first.
+        prev_folio_state:   FolioState from the previous folio run. If
+                            provided (even with an empty remaining_words -
+                            e.g. the previous folio's chant fully
+                            terminated there), it is authoritative and
+                            infer_continuation is never consulted: an
+                            explicit answer of "nothing to carry over"
+                            is real information from the run itself, not
+                            an absence of information.
+        infer_continuation: When True (default) and prev_folio_state is
+                            None (no chain information at all - e.g. a
+                            standalone single-folio run), scan csv_rows
+                            for the immediately preceding folio (by CSV
+                            ordering) with a 77 break and prepend its
+                            post-77 words. Handles the common case where
+                            the previous folio was not run first.
 
     Returns:
         FlatTextData with words, anchors, chant_spans, initial_pointer,
@@ -292,14 +296,25 @@ def build_flat_text_and_anchors(
     has_continuation = False
 
     # Prepend continuation words carried from the previous folio's 77 break.
-    if prev_folio_state is not None and prev_folio_state.remaining_words:
-        words.extend(prev_folio_state.remaining_words)
-        chant_spans.append(ChantSpan(
-            sequence=0,
-            start_word=0,
-            end_word=len(words),
-        ))
-        has_continuation = True
+    # An explicitly-given prev_folio_state is authoritative even when its
+    # remaining_words is empty (fully_consumed=True, i.e. the actual previous
+    # folio's chant terminated with nothing left over) - that's real
+    # information from the run itself, and must NOT fall through to the
+    # infer_continuation CSV-guess below just because the list happens to be
+    # empty. Without this, a folio whose true predecessor left zero
+    # continuation (e.g. a phantom folio like "003r" whose chant ends there)
+    # would still get the CSV-scan's stale guess from whichever earlier folio
+    # happens to have a 77, even though the real chain already answered
+    # "nothing to carry over" for this exact folio.
+    if prev_folio_state is not None:
+        if prev_folio_state.remaining_words:
+            words.extend(prev_folio_state.remaining_words)
+            chant_spans.append(ChantSpan(
+                sequence=0,
+                start_word=0,
+                end_word=len(words),
+            ))
+            has_continuation = True
     elif infer_continuation:
         # Check only the immediately preceding folio for a 77 break.
         # Searching all preceding folios would incorrectly grab a stale
