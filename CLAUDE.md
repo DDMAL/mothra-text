@@ -1,37 +1,59 @@
-# CLAUDE.md — mothra-text / line-seg-eval
+# mothra-text
 
 ## Python environment
 
-All pipeline code (`run_pipeline.py`, `run_kraken.py`, etc.) must be run with the
-`line-seg-eval` conda environment. **Do not use `conda run -n line-seg-eval python`** —
-pyenv intercepts the `python` command and uses `/Users/cassiebastress/.pyenv/versions/3.12.6/`
-instead of the conda env, which is missing `htrflow` and other dependencies.
+Never use `conda run -n line-seg-eval python` — pyenv intercepts `python` and uses the wrong interpreter. Always use the full path:
 
-Always invoke Python directly via the full path:
 ```
 /Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python
 ```
 
-The pyenv Python 3.12 has `kraken` installed but lacks `htrflow`, `biopython`, and
-`volpiano-display-utilities`. The conda env Python 3.10 has everything.
+The pyenv Python 3.12 has `kraken` but lacks `htrflow`, `biopython`, and `volpiano-display-utilities`. The conda env Python 3.10 has everything.
 
-## Dependency manifest
+## Tests
 
-All dependencies are pinned in `requirements.txt` (generated from `pip freeze` in the
-conda env). Install with `pip install -r requirements.txt` inside the `line-seg-eval`
-conda env. To update after adding a new package, re-run `pip freeze > requirements.txt`
-and commit the result.
+```bash
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python -m pytest tests/ -v
+```
 
-`pyproject.toml` contains project metadata and pytest configuration only — it does not
-manage dependencies and does not require Poetry.
+Run after any change to `steps/` or `run_pipeline.py`. Run a single test file when faster iteration is needed.
+
+## Key commands
+
+```bash
+# Single-folio pipeline
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python run_pipeline.py \
+  --image IMAGE --folio FOLIO --source-id SOURCE_ID --output-dir DIR
+
+# Multi-folio chain
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python run_chain.py \
+  --images ... --folios ... --output-dir DIR
+```
+
+## Output rules
+
+- MEI JSON auto-naming: `{RISM-code}_{shelfmark}_{folio}.json` (e.g. `CH-E_611_001r.json`) — always zero-pad folios (`001r` not `1r`)
+- `--export-json` (Pipeline Inspector JSON): save to `~/Downloads/DDMAL/`, never to `gui/public/`
+- Never overwrite an existing output file — always use a distinct path unless explicitly told to overwrite
+
+## Dependencies
+
+All dependencies are pinned in `requirements.txt` (from `pip freeze` inside the conda env). `pyproject.toml` is metadata and pytest config only — not managed by Poetry.
+
+When adding or removing a package:
+```bash
+pip freeze > requirements.txt  # run inside conda env
+```
+Commit the updated `requirements.txt` with the code change.
 
 ## Documentation rule
 
-Before committing any code change, update the relevant documentation:
-- If the change affects how a step works, update `steps/README.md`.
-- If the change affects CLI flags or pipeline behaviour visible to users, update the root `README.md`.
-- If the change affects how the GUI JSON is generated or interpreted, update `gui/README.md`.
-- If the change affects a script in `scripts/`, update `scripts/README.md`.
-- If the change adds or removes a dependency, re-run `pip freeze > requirements.txt` in the conda env and commit the updated file.
+Update the relevant doc in the same commit as the code change — never as a follow-up:
 
-Docs must be updated in the same commit as the code change, not as a follow-up.
+| What changed | Update |
+|---|---|
+| A pipeline step | `steps/README.md` |
+| CLI flags or pipeline behaviour | root `README.md` |
+| GUI JSON schema | `gui/README.md` |
+| A script in `scripts/` | `scripts/README.md` |
+| A dependency | re-run `pip freeze > requirements.txt` and commit |
