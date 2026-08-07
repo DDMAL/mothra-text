@@ -224,6 +224,7 @@ def run(
     column_bimodal_threshold: float = 0.5,
     prev_folio_state: "FolioState | None" = None,
     folio_state_out: str | None = None,
+    infer_continuation: bool = True,
     debug_ocr: bool = False,
     column_count: int | None = None,
     ocr_only_mode: bool = False,
@@ -260,6 +261,17 @@ def run(
         folio_state_out: If given, write the folio state JSON to this
             path after allocation (for use as prev_folio_state on the
             next folio).  Ignored in OCR-only mode.
+        infer_continuation: When True (default) and prev_folio_state is
+            None, build_flat_text_and_anchors scans the CSV itself for
+            the nearest preceding folio with a 77 break and prepends its
+            post-77 words — a same-CSV heuristic that knows nothing
+            about which folio actually preceded this one in the current
+            run. Pass False to suppress that guess when the caller
+            already knows (e.g. via a contiguity check against the
+            actual previous folio processed) that this folio's true
+            predecessor is not the CSV's nearest one — otherwise a
+            skipped intervening folio's continuation can be misattributed
+            to this one. Ignored in OCR-only mode.
         debug_ocr: When True, print per-fused-line OCR text and NW
             alignment detail to stdout for diagnosis.  In OCR-only mode
             prints a startup banner and flags any ignored Cantus args.
@@ -440,6 +452,7 @@ def run(
             flat_text = build_flat_text_and_anchors(
                 csv_rows, folio,
                 prev_folio_state=prev_folio_state,
+                infer_continuation=infer_continuation,
             )
 
             alloc_result = allocate_lines(

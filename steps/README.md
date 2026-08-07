@@ -157,10 +157,19 @@ Builds `FlatTextData` from a Cantus CSV:
      `continuation_words`)
    - `777` → `column_break_777` anchor
 3. When `infer_continuation=True` (default) and no `prev_folio_state` is given,
-   automatically scans all CSV rows for the last row from any preceding folio with `77`
-   in its volpiano and prepends the post-77 words as a virtual ChantSpan (sequence 0).
-   This means folio runs do not need to be chained sequentially to handle mid-chant
-   page boundaries.
+   automatically finds the immediately preceding folio by CSV ordering (not all
+   preceding history — an intervening folio with no `77` would otherwise let a stale
+   break from much earlier get misattributed) and, if its last row's volpiano has `77`,
+   prepends the post-77 words as a virtual ChantSpan (sequence 0). This means a single
+   standalone folio run does not need to be chained to recover a mid-chant page
+   boundary. **Caveat:** "immediately preceding folio by CSV ordering" is not the same
+   as "the folio that actually precedes this one in a given run" — if a run
+   intentionally skips a folio that WAS the true predecessor, this heuristic has no way
+   to know that and will still attribute the skipped folio's continuation to whichever
+   folio is being processed now. Callers that already know actual run-time adjacency
+   (`run_chain.py`, `text-service`'s batch endpoint) pass `infer_continuation=False`
+   explicitly whenever their own contiguity check fails, rather than relying on this
+   CSV-only heuristic to catch that case.
 4. `line_offset` skips the first N `within_chant_7` anchors, setting `initial_pointer`
    accordingly (for images that are crops starting partway through a folio).
 

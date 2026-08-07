@@ -108,6 +108,7 @@ def _run_one(
     image_path: str,
     folio: str,
     prev_state: "object | None",
+    infer_continuation: bool,
     export_json_path: "str | None",
     mei_json_path: "str | None",
     folio_label: "str",
@@ -141,6 +142,7 @@ def _run_one(
             column_bimodal_threshold=args.column_bimodal_threshold,
             prev_folio_state=prev_state,
             folio_state_out=tmp_path,
+            infer_continuation=infer_continuation,
             debug_ocr=args.debug_ocr,
             column_count=args.column_count,
             mothra_json_path=mothra_json_path,
@@ -321,6 +323,14 @@ def main() -> None:
     for i, (image_path, folio, out_json, mei_path, folio_label) in enumerate(
         zip(images, args.folios, export_paths, mei_paths, folio_labels)
     ):
+        # infer_continuation defaults True for a run's first folio (no true
+        # predecessor to know either way) or when this folio genuinely
+        # follows the previous one. When contiguity fails below, prev_state
+        # is reset - but build_flat_text_and_anchors' own infer_continuation
+        # default would otherwise still scan the CSV itself for "the nearest
+        # preceding folio with a 77 break" and re-derive the same wrong
+        # continuation independent of that reset, so it must be suppressed too.
+        infer_continuation = True
         if prev_folio is not None and not _are_contiguous(prev_folio, folio):
             logger.warning(
                 "Folio %s does not follow %s — resetting chain state",
@@ -328,6 +338,7 @@ def main() -> None:
                 prev_folio,
             )
             prev_state = None
+            infer_continuation = False
 
         mothra_json_path: "str | None" = None
         if mothra_dir is not None:
@@ -348,6 +359,7 @@ def main() -> None:
                 image_path=image_path,
                 folio=folio,
                 prev_state=prev_state,
+                infer_continuation=infer_continuation,
                 export_json_path=out_json,
                 mei_json_path=mei_path,
                 folio_label=folio_label,
