@@ -313,3 +313,38 @@ class TestMidWordBreaks:
         result = build_flat_text_and_anchors(rows, "001r")
         # The mid-word break is after the 77 → dropped.
         assert result.mid_word_breaks == []
+
+    def test_mid_word_break_after_pipe_separator_stays_in_range(self):
+        # Regression for mothra-text#45: a Cantus '|' phrase separator is
+        # its own whitespace-delimited token in the raw text and is
+        # stripped entirely by clean_text(), but the volpiano field's own
+        # word-group count still allocates a position for it. Before the
+        # fix, a mid-word break after the pipe landed one index past the
+        # end of `words`, crashing allocate_lines with an IndexError.
+        #
+        # Real data: Cantus source 123672 (CH-Fco Ms. 2), folio 155v,
+        # sequence 5, cantus_id 006291. The '|' sits between "eius" and
+        # "Exaudi"; the trailing mid-word break splits the row's actual
+        # last word, "misericordia" (1 syllable + 5 syllables).
+        text = (
+            "Civitatem istam tu circunda domine et angeli tui custodiant "
+            "muros eius | Exaudi domine populum tuum cum misericordia"
+        )
+        volpiano = (
+            "1---a--a--cd--df---fe-fgde--dc---d---f--ffE--cd7-def-gefe---d"
+            "--defede--ed---f---fgh--hg-ge--g---fgf-fede--ed---d--de--d--"
+            "defedc---d--fe-fgf7---fede--ed---3---a--cde--d---de--d--d---"
+            "de--d--d---dcd-fgfe--fgfg--gf---ffE---dc7--d--fd-efe--d--de-"
+            "fede--ed---4"
+        )
+        rows = [_row("155v", "5", text, volpiano=volpiano)]
+        result = build_flat_text_and_anchors(rows, "155v")
+
+        assert len(result.words) == 17
+        assert result.words[-1] == "misericordia"
+        assert len(result.mid_word_breaks) == 1
+        mwb = result.mid_word_breaks[0]
+        assert mwb.anchor_word_index <= len(result.words)
+        assert mwb.anchor_word_index == 17
+        assert mwb.syl_left == 1
+        assert mwb.syl_right == 5

@@ -182,6 +182,13 @@ Builds `FlatTextData` from a Cantus CSV:
    CSV-only heuristic to catch that case.
 5. `line_offset` skips the first N `within_chant_7` anchors, setting `initial_pointer`
    accordingly (for images that are crops starting partway through a folio).
+6. Cantus `|` phrase separators (e.g. an antiphon and its verse combined in one row)
+   are their own whitespace-delimited token in `fulltext_ms`/`fulltext_standardized`
+   and are stripped entirely by `clean_text()`, but the row's `volpiano` field still
+   allocates a word-group position for them. `_parse_row_words_and_anchors` corrects
+   every anchor/mid-word-break index for this offset (by counting `|` tokens in the
+   raw, uncleaned text) before returning, so `mid_word_breaks`/anchors are always
+   valid indices into the returned (already pipe-stripped) word list.
 
 ### `allocate_lines(flat_text, sorted_labels, ocr_texts, column_count=1, ...)`
 
@@ -315,6 +322,9 @@ Builds the `gt_lookup` callable from a Cantus CSV export.
 - `fetch_cantus_csv(source_id)` — downloads from `cantusdatabase.org/source/{id}/csv/`
 - `load_local_csv(path)` — reads a local Cantus-format CSV
 - `make_manifest_lookup(manifest)` — wraps a `{node_label: text}` dict as a callable
+- `clean_text(text)` — strips Cantus `|` phrase separators and collapses whitespace. See
+  `nw_chant_allocator.py`'s `build_flat_text_and_anchors` point 6 above for how its callers
+  correct volpiano-derived indices for the word position this removes.
 
 ---
 

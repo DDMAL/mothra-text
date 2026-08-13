@@ -138,7 +138,7 @@ def _split_word_at_syl_boundary(
 
 
 def _parse_row_words_and_anchors(
-    text: str, volpiano: str,
+    raw_text: str, volpiano: str,
 ) -> tuple[
     list[str],
     list[tuple[int, str]],
@@ -148,6 +148,12 @@ def _parse_row_words_and_anchors(
     """Parse one chant row's text+volpiano into words, anchors, and breaks.
 
     Also identifies post-77 continuation words for the next folio.
+
+    Args:
+        raw_text: this row's fulltext_ms/fulltext_standardized, NOT yet
+            passed through clean_text() — this function cleans it
+            internally (see the pipe-offset note below).
+        volpiano: this row's volpiano field.
 
     Returns:
         (this_folio_words, raw_anchors,
@@ -161,12 +167,37 @@ def _parse_row_words_and_anchors(
         - raw_mid_word_breaks: [(anchor_word_index, syl_left, syl_right), ...]
           for each within_chant_7 break that falls mid-word; syl_left and
           syl_right are the syllable counts on each side of the break
+
+    Note on Cantus '|' phrase separators: clean_text() strips '|' entirely,
+    but the volpiano field's own word-group structure still allocates a
+    position for it, so anchor/mid-word-break indices computed from the
+    volpiano land one position too high for every '|' before them. `|` is
+    already its own whitespace-delimited token in the raw text, so counting
+    it via a plain split (no cleaning) gives an exact position-by-position
+    offset; every index this function returns is corrected by that offset
+    before being handed back, so callers always get valid indices into the
+    returned (cleaned) word list.
     """
-    words = text.split() if text else []
+    from steps.gt_manifest import clean_text  # noqa: PLC0415
+
+    words = clean_text(raw_text).split() if raw_text else []
     if not words:
         return [], [], [], []
     if not volpiano:
         return words, [], [], []
+
+    raw_tokens = raw_text.split() if raw_text else []
+    pipe_offsets = [0] * (len(raw_tokens) + 1)
+    running = 0
+    for idx, tok in enumerate(raw_tokens):
+        pipe_offsets[idx] = running
+        if tok == "|":
+            running += 1
+    pipe_offsets[len(raw_tokens)] = running
+
+    def _to_real_index(raw_idx: int) -> int:
+        raw_idx = min(max(raw_idx, 0), len(raw_tokens))
+        return raw_idx - pipe_offsets[raw_idx]
 
     # Split volpiano keeping breaks: ["seg0", "7+", "seg1", "7+", ...]
     parts = re.split(r"(7+)", volpiano)
@@ -226,6 +257,16 @@ def _parse_row_words_and_anchors(
 
             if anchor_type == "page_break_77" and continuation_start is None:
                 continuation_start = word_idx
+
+    # Correct every index from volpiano-native (pipe-inclusive) position
+    # space into real (post-clean_text) word-space before using any of
+    # them against `words`, which is already in real word-space.
+    raw_anchors = [(_to_real_index(wi), at) for wi, at in raw_anchors]
+    raw_mid_word_breaks = [
+        (_to_real_index(wi), sl, sr) for (wi, sl, sr) in raw_mid_word_breaks
+    ]
+    if continuation_start is not None:
+        continuation_start = _to_real_index(continuation_start)
 
     # Determine which words stay on this folio vs continue to next.
     if continuation_start is not None:
@@ -345,7 +386,7 @@ def build_flat_text_and_anchors(
                 or ""
             ).strip()
             _, _, carry_words, _ = _parse_row_words_and_anchors(
-                clean_text(raw_carry),
+                raw_carry,
                 (carry_row.get("volpiano") or "").strip(),
             )
             if carry_words:
@@ -378,7 +419,7 @@ def build_flat_text_and_anchors(
         if not volpiano:
             no_volpiano_count += 1
         row_words, raw_anchors, row_continuation, row_mwbs = (
-            _parse_row_words_and_anchors(text, volpiano)
+            _parse_row_words_and_anchors(raw_text, volpiano)
         )
 
         if not row_words and not row_continuation:
@@ -449,7 +490,7 @@ def build_flat_text_and_anchors(
             ).strip()
             if raw_suffix:
                 suffix_probe_words, _, _, _ = _parse_row_words_and_anchors(
-                    clean_text(raw_suffix), ""
+                    raw_suffix, ""
                 )
 
     return FlatTextData(
