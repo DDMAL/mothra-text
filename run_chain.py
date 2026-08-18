@@ -61,7 +61,14 @@ def _are_contiguous(a: str, b: str) -> bool:
 
 
 def _find_tridis_model() -> "str | None":
-    """Return the local path to the Tridis model, or None if not installed."""
+    """Return the local path to the Tridis model, or None if not installed.
+
+    Deliberately duplicated from run_pipeline.py rather than imported: this
+    runs before argparse (to set --recognition-model's default), and
+    `import run_pipeline` pulls in htrflow/kraken/torch, adding several
+    seconds to every invocation including `--help` and argument-validation
+    errors. Keep both copies in sync if the lookup logic ever changes.
+    """
     try:
         from platformdirs import user_data_dir
         htrmopo_dir = Path(user_data_dir("htrmopo"))

@@ -161,11 +161,14 @@ class TestAllocateLinesSnapping:
 
     def test_no_snap_when_diff_exceeds_window(self):
         # NW best_k=5, anchor at 2 → diff=3 > snap_window=1 → flag emitted.
+        # force_window=0 pins this test to snap_window's own boundary,
+        # independent of allocate_lines()'s force_window default.
         words = ["a", "b", "c", "d", "e", "f", "g"]
         anchors = [Anchor(2, "within_chant_7")]
         flat = _flat(words, anchors)
         result = allocate_lines(
-            flat, ["line0"], {"line0": "a b c d e"}, snap_window=1
+            flat, ["line0"], {"line0": "a b c d e"},
+            snap_window=1, force_window=0,
         )
         assert any(
             f.flag_type == "nw_volpiano_disagreement" for f in result.flags

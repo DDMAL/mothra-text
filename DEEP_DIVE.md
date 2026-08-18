@@ -54,7 +54,7 @@
 
 The repo implements an end-to-end pipeline that takes a photograph of a medieval chant manuscript folio and produces syllable-level bounding boxes annotated with Cantus Database text. The primary output is a JSON file consumable by the Pipeline Inspector GUI (and separately by the MEI encoding workflow). The end goal is aligning the neume notation in manuscript images with the syllabic text of the chant, enabling musicological research and digital edition work.
 
-Two older sub-projects (YOLO/RTMDet segmentation model comparison and PyLaia HTR baselines) now live in `experiments/` and are no longer part of the main pipeline.
+An older sub-project (YOLO/RTMDet segmentation model comparison) now lives in `experiments/` and is no longer part of the main pipeline.
 
 **Artifact map:**
 
@@ -260,8 +260,7 @@ line-seg-eval/
 │   ├── README.md
 │   ├── run_htrflow.py          # YOLO/RTMDet runner
 │   ├── run_all.py              # runs all three models
-│   ├── pipelines/              # htrflow YAML configs
-│   └── pylaia_baseline/        # PyLaia HTR experiments
+│   └── pipelines/              # htrflow YAML configs
 │
 └── tests/                      # pytest suite (200+ tests)
 ```

@@ -32,6 +32,9 @@ def _find_tridis_model() -> str | None:
     platformdirs) for the Tridis .mlmodel file. Works on any machine
     where the model has been installed with htrmopo regardless of the
     UUID-named subdirectory.
+
+    Duplicated (not imported) in run_chain.py — see that copy's docstring
+    for why.
     """
     try:
         from platformdirs import user_data_dir
@@ -324,6 +327,9 @@ def run(
             _masked.save(_tmp.name)
             _mothra_tmp = _tmp.name
         image_path = _mothra_tmp
+    # _mothra_tmp is cleaned up in the finally below even if a later stage
+    # raises — see DEEP_DIVE.md §2 "Stage 0" for why masking must live here
+    # (inside run()) rather than in each caller.
     try:
         collection = Collection([image_path])
         folio = folio or Path(_original_image_path).stem
@@ -461,8 +467,6 @@ def run(
                 ocr_texts=fused_ocr_texts,
                 column_count=column_count,
                 left_column_count=left_column_count,
-                snap_window=2,
-                force_window=10,
                 debug=debug_ocr,
                 fused_lines=fused_lines,
                 node_ocr=node_ocr,

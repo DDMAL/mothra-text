@@ -5,7 +5,7 @@ The primary artifact is `run_pipeline.py`, which runs a folio image through line
 optional Cantus text alignment, and word/syllable geometry generation. Two visualization tools
 (Pipeline Inspector GUI and PAGE XML Viewer) let you inspect the output.
 
-For comparative segmentation experiments and PyLaia baselines, see [`experiments/README.md`](experiments/README.md).
+For comparative segmentation experiments, see [`experiments/README.md`](experiments/README.md).
 
 ---
 
@@ -289,8 +289,7 @@ mothra-text/
 │   ├── README.md                   # experiments documentation
 │   ├── run_htrflow.py              # YOLO/RTMDet segmentation runner
 │   ├── run_all.py                  # runs all three models
-│   ├── pipelines/                  # htrflow YAML configs for YOLO and RTMDet
-│   └── pylaia_baseline/            # zero-shot PyLaia HTR baselines
+│   └── pipelines/                  # htrflow YAML configs for YOLO and RTMDet
 ├── gui/                            # Pipeline Inspector browser app
 │   └── README.md
 ├── scripts/                        # utility and conversion scripts
@@ -362,7 +361,7 @@ All dependencies (including transitive) are pinned in `requirements.txt`. To upd
 after adding a new package, re-run `pip freeze > requirements.txt` in the active conda
 env and commit the result.
 
-For experiment-specific dependencies (OpenMMLab stack for RTMDet, PyLaia environment),
+For experiment-specific dependencies (OpenMMLab stack for RTMDet),
 see [`experiments/README.md`](experiments/README.md).
 
 ---
