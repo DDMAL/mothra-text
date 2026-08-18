@@ -18,8 +18,10 @@ No installation required — open the link and load your files.
 
 The viewer shows:
 - **Purple polygons** — Kraken BLLA line segmentation regions
-- **Teal rectangles** — word-level bounding boxes with text labels
-- Toggle each layer on/off with the buttons in the top bar
+- **Teal rectangles** — word-level bounding boxes with Cantus ground-truth text (`source: "gt"`)
+- **Rose rectangles** — word-level bounding boxes falling back to OCR text (`source: "fallback"`)
+- **Orange regions** — syllable-level subdivisions within each word
+- Toggle each layer (Lines, Words, Syllables) on/off with the buttons in the top bar
 - Pan and zoom with scroll and drag
 
 Each word in the JSON carries a `source` field: `"gt"` when the line was assigned Cantus

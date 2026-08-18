@@ -180,8 +180,9 @@ In **Cantus-aligned mode**, this is the most complex stage. See Section 5 for a 
 
 1. `build_flat_text_and_anchors()` flattens all chant CSV rows for the folio into a single ordered word list, extracting volpiano break positions as `Anchor` objects.
 2. `fuse_colinear_segments()` produces fused OCR texts (concatenated constituent texts).
-3. `allocate_lines()` maps each fused line label to a word span using Needleman-Wunsch alignment.
-4. `_defuse_manifest()` distributes words back to constituent node labels proportionally by pixel width.
+3. **Pre-NW music-region filter** (optional, library callers only — not exposed as a CLI flag): when `music_boxes` (YOLO-detected stave/neume bounding boxes, absolute pixel `[x0, y0, x1, y1]` coordinates) is passed to `run()`, any fused line whose bbox overlaps a music region by more than `music_overlap_threshold` (default 0.30, strict `>`) of the line's own area is dropped from `sorted_labels` before NW alignment runs. This prevents spurious BLLA baselines near music staves from consuming ground-truth word slots and shifting every subsequent line off by one. Dropped nodes are recorded on `collection._music_filter_dropped`. Only `text-service/main.py` (the mothra API layer) passes `music_boxes`; CLI runs and `run_chain.py` pass `music_boxes=None` and are unaffected.
+4. `allocate_lines()` maps each fused line label to a word span using Needleman-Wunsch alignment.
+5. `_defuse_manifest()` distributes words back to constituent node labels proportionally by pixel width.
 
 **Output:** `manifest: dict[str, str]` — original node label → Cantus word fragment.
 

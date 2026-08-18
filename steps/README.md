@@ -146,7 +146,7 @@ chant started mid-line after the previous chant ended.
 | `ValidationFlag` | Quality signal emitted when NW and volpiano disagree, line counts mismatch, etc. |
 | `FolioState` | JSON-serialisable state capturing post-77 continuation words for the next folio |
 
-### `build_flat_text_and_anchors(csv_rows, folio, line_offset=0, prev_folio_state=None, infer_continuation=True)`
+### `build_flat_text_and_anchors(csv_rows, folio, prev_folio_state=None, infer_continuation=True)`
 
 Builds `FlatTextData` from a Cantus CSV:
 
@@ -180,9 +180,7 @@ Builds `FlatTextData` from a Cantus CSV:
    (`run_chain.py`, `text-service`'s batch endpoint) pass `infer_continuation=False`
    explicitly whenever their own contiguity check fails, rather than relying on this
    CSV-only heuristic to catch that case.
-5. `line_offset` skips the first N `within_chant_7` anchors, setting `initial_pointer`
-   accordingly (for images that are crops starting partway through a folio).
-6. Cantus `|` phrase separators (e.g. an antiphon and its verse combined in one row)
+5. Cantus `|` phrase separators (e.g. an antiphon and its verse combined in one row)
    are their own whitespace-delimited token in `fulltext_ms`/`fulltext_standardized`
    and are stripped entirely by `clean_text()`, but the row's `volpiano` field still
    allocates a word-group position for them. `_parse_row_words_and_anchors` corrects
@@ -346,7 +344,7 @@ conda activate line-seg-eval
 pytest tests/ -v
 ```
 
-245 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
+254 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
 `test_nw_alignment.py`, `test_nw_folio_state.py`, and others.
 
 ---

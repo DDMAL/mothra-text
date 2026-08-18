@@ -129,6 +129,9 @@ python run_chain.py \
 | `--export-json PATH [...]` | One pipeline inspector JSON path per folio; parent dirs created automatically |
 | `--folio-states-dir PATH` | Save intermediate `state_{folio}.json` files here for debugging |
 | `--debug-ocr` | Print per-line OCR and NW alignment detail for every folio |
+| `--mothra-jsons-dir PATH` | Directory containing mothra annotation JSONs named `{image_stem}.json`, one per folio (produced by `scripts/run_mothra_inference.py --out-dir`). Masks each folio's image before segmentation; a missing per-folio JSON logs a warning and runs that folio unmasked. |
+| `--padding PX` | Pixels added around each text bbox before masking (default 15). Only used when `--mothra-jsons-dir` is given. |
+| `--skip-masking` | Skip text-region masking even if `--mothra-jsons-dir` is given. |
 
 All model and device flags from `run_pipeline.py` (`--segmentation-model`,
 `--recognition-model`, `--device`, `--stub-mode`, `--column-count`,
@@ -167,6 +170,7 @@ python run_pipeline.py \
 |---|---|
 | `--mothra-json PATH` | Mothra annotation JSON for this folio. Blacks out non-text regions before line segmentation. Omit to run without masking. |
 | `--padding PX` | Pixels added around each text bbox before masking (default 15). |
+| `--skip-masking` | Skip text-region masking even if `--mothra-json` is given. |
 
 **Programmatic usage:** masking is also available when calling `run()` directly
 as a library:
@@ -261,6 +265,9 @@ Utility and conversion scripts in `scripts/`:
 | `mothra_to_page.py` | Convert Mothra Annotator JSON → PAGE XML (for BLLA training data) |
 | `convert_to_mei_input.py` | Convert pipeline JSON → MEI Text Alignment JSON |
 | `debug_column_detection.py` | Visualize bimodal column detection coverage profile |
+| `run_mothra_inference.py` | Run YOLOv11 mothra models over folio images → mothra annotation JSON |
+| `compare_runs.py` | Compare pipeline output JSONs across different approaches/runs |
+| `visualize_mothra.py` | Overlay mothra annotation bboxes on a folio image |
 
 See [`scripts/README.md`](scripts/README.md) for usage.
 
@@ -286,15 +293,33 @@ mothra-text/
 │   ├── gt_manifest.py
 │   ├── kraken_recognition.py
 │   ├── kraken_segmentation.py
+│   ├── mothra_mask.py
 │   ├── nw_chant_allocator.py
 │   ├── syllable_segmentation.py
 │   └── README.md
+├── docs/                           # user-facing documentation
+│   ├── user_guide.md
+│   └── user_decision_tree.md
 ├── tests/                          # pytest suite (200+ tests)
 ├── page_viewer.py                  # PAGE XML Viewer desktop GUI
 ├── run_kraken.py                   # standalone Kraken BLLA runner + visualization
 ├── run_pipeline.py                 # end-to-end pipeline (single folio)
 └── run_chain.py                    # automated multi-folio chaining wrapper
 ```
+
+---
+
+## Documentation
+
+| Doc | Covers |
+|---|---|
+| [`DEEP_DIVE.md`](DEEP_DIVE.md) | Full architecture deep dive: every pipeline stage, key data structures, known limitations, and pitfalls/gotchas |
+| [`steps/README.md`](steps/README.md) | Per-module reference for `steps/` |
+| [`docs/user_guide.md`](docs/user_guide.md) | Troubleshooting and CLI option reference for end users |
+| [`docs/user_decision_tree.md`](docs/user_decision_tree.md) | GUI flag mapping and a decision tree for choosing pipeline options |
+| [`gui/README.md`](gui/README.md) | Pipeline Inspector GUI usage and local development |
+| [`scripts/README.md`](scripts/README.md) | Utility/conversion script reference |
+| [`experiments/README.md`](experiments/README.md) | Comparative segmentation research (not part of the main pipeline) |
 
 ---
 
