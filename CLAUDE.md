@@ -10,6 +10,10 @@ Never use `conda run -n line-seg-eval python` — pyenv intercepts `python` and 
 
 The pyenv Python 3.12 has `kraken` but lacks `htrflow`, `biopython`, and `volpiano-display-utilities`. The conda env Python 3.10 has everything.
 
+## Pitfalls
+
+See [DEEP_DIVE.md §13 Pitfalls and Gotchas](DEEP_DIVE.md#13-pitfalls-and-gotchas) for more non-obvious traps: the `snap_window`/`force_window` unified default, the `mothra`-repo confidence-threshold coordination point, the `--column-bimodal-threshold` vs. YOLO `--conf` naming collision, and the two incompatible bbox coordinate formats used across this codebase.
+
 ## Tests
 
 ```bash

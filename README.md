@@ -218,6 +218,14 @@ collection, manifest = run(
 Compare results with `scripts/compare_runs.py`. Load all output JSONs into the
 Pipeline Inspector GUI for visual comparison.
 
+**How this repo is invoked in production:** the `--mothra-json`/`mothra_json_path` and
+`music_boxes` inputs described in 1b/1c above are exactly what the [`mothra`](https://github.com/DDMAL/mothra)
+landing-page repo's `text-service/main.py` passes to this repo's `run()` over an internal HTTP
+call — `mothra-text` is included there as a git submodule. See
+[DEEP_DIVE.md §9a](DEEP_DIVE.md#9a-relationship-to-the-mothra-repo-landing-page--text-service)
+for a summary of that integration, and [DDMAL/mothra#151](https://github.com/DDMAL/mothra/issues/151)
+for the full architecture write-up.
+
 ---
 
 ### 2. Pipeline Inspector GUI
@@ -320,6 +328,7 @@ mothra-text/
 | [`gui/README.md`](gui/README.md) | Pipeline Inspector GUI usage and local development |
 | [`scripts/README.md`](scripts/README.md) | Utility/conversion script reference |
 | [`experiments/README.md`](experiments/README.md) | Comparative segmentation research (not part of the main pipeline) |
+| [DDMAL/mothra#151](https://github.com/DDMAL/mothra/issues/151) (external) | Full architecture write-up of how the `mothra` landing-page repo integrates this repo in production — see also [DEEP_DIVE.md §9a](DEEP_DIVE.md#9a-relationship-to-the-mothra-repo-landing-page--text-service) |
 
 ---
 
