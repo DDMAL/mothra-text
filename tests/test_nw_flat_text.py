@@ -348,3 +348,107 @@ class TestMidWordBreaks:
         assert mwb.anchor_word_index == 17
         assert mwb.syl_left == 1
         assert mwb.syl_right == 5
+
+
+class TestPipeSeparatorOffsetEdgeCases:
+    """Further coverage for the mothra-text#45 pipe-offset fix (d8e7b34),
+    beyond the single mid-word-break regression case above."""
+
+    def test_anchor_offset_with_single_pipe(self):
+        # A '|' before a plain (non-mid-word) within_chant_7 anchor must
+        # shift that anchor's index too, not just mid-word breaks.
+        # Raw tokens: alpha(0) |(1) beta(2) gamma(3) -> 4 volpiano word
+        # groups before the break; real words: alpha beta gamma (3).
+        rows = [_row("001r", "1", "alpha | beta gamma",
+                     volpiano="a---b---c---d7e")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.words == ["alpha", "beta", "gamma"]
+        assert len(result.anchors) == 1
+        # Raw anchor index 4, minus 1 pipe before it, minus nothing after
+        # clamp -> but only 3 real words exist, so clamp caps it at 3.
+        assert result.anchors[0].word_index == 3
+        assert result.anchors[0].anchor_type == "within_chant_7"
+
+    def test_anchor_offset_with_multiple_pipes(self):
+        # Two '|' tokens before the anchor; pipe_offsets must accumulate
+        # across both rather than only correcting for one.
+        # Raw tokens: alpha(0) |(1) beta(2) gamma(3) |(4) delta(5) epsilon(6)
+        # Anchor after 5 raw tokens (alpha | beta gamma |) -> 2 pipes -> -2.
+        rows = [_row("001r", "1", "alpha | beta gamma | delta epsilon",
+                     volpiano="a---b---c---d---e7f---g")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.words == ["alpha", "beta", "gamma", "delta", "epsilon"]
+        assert len(result.anchors) == 1
+        assert result.anchors[0].word_index == 3
+        assert result.anchors[0].anchor_type == "within_chant_7"
+
+    def test_continuation_start_offset_with_pipe(self):
+        # A '|' before a page_break_77 must shift continuation_start too,
+        # not just within_chant_7 anchors or mid-word breaks.
+        # Raw tokens: alpha(0) |(1) beta(2) gamma(3) delta(4) epsilon(5)
+        # -> 4 raw tokens (alpha | beta gamma) before the 77 break, minus
+        # 1 pipe -> continuation_start=3 in real word space.
+        rows = [_row("001r", "1", "alpha | beta gamma delta epsilon",
+                     volpiano="a---b---c---d77e---f")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.words == ["alpha", "beta", "gamma"]
+        assert result.continuation_words == ["delta", "epsilon"]
+        assert len(result.anchors) == 1
+        assert result.anchors[0].word_index == 3
+        assert result.anchors[0].anchor_type == "page_break_77"
+
+    def test_carry_words_from_prev_folio_with_pipe(self):
+        # The infer_continuation CSV-scan path (build_flat_text_and_anchors'
+        # own "carry words" call site) must also apply the pipe-index
+        # correction to the continuation words it prepends onto the next
+        # folio's word list.
+        rows = [
+            _row("001r", "1", "alpha | beta gamma delta epsilon",
+                 volpiano="a---b---c---d77e---f"),
+            _row("002r", "2", "zeta"),
+        ]
+        result = build_flat_text_and_anchors(rows, "002r")
+        assert result.has_continuation is True
+        assert result.words == ["delta", "epsilon", "zeta"]
+        assert result.chant_spans[0].sequence == 0
+        assert result.chant_spans[0].end_word == 2
+
+    def test_suffix_probe_words_strip_pipe_without_volpiano(self):
+        # The suffix-probe call site passes raw (uncleaned) text with an
+        # empty volpiano string; _parse_row_words_and_anchors must still
+        # clean it internally so '|' never leaks into suffix_probe_words.
+        rows = [
+            _row("001r", "1", "alpha | beta gamma"),  # no volpiano -> no 77
+            _row("002r", "2", "zeta"),
+        ]
+        result = build_flat_text_and_anchors(rows, "002r")
+        assert result.has_continuation is False
+        assert result.suffix_probe_words == ["alpha", "beta", "gamma"]
+
+    def test_anchor_index_clamped_when_volpiano_overcounts_words(self):
+        # If a row's volpiano implies more word-groups than the row has
+        # raw tokens (a real-world data inconsistency), _to_real_index
+        # clamps the raw index to len(raw_tokens) before subtracting the
+        # pipe offset, so the anchor lands at a valid in-bounds position
+        # (here, exactly at the end of `words`) instead of past it.
+        rows = [_row("001r", "1", "alpha beta", volpiano="a---b---c---d7")]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.words == ["alpha", "beta"]
+        assert len(result.anchors) == 1
+        assert result.anchors[0].word_index == 2
+        assert result.anchors[0].word_index <= len(result.words)
+
+    def test_pipe_offset_composes_across_multiple_rows(self):
+        # Row 1 (no volpiano) contributes 2 real words; row 2 has its own
+        # pipe-corrected anchor. The global anchor index must be row 1's
+        # real word count plus row 2's own corrected offset, not row 2's
+        # raw-token-space offset added on top of row 1's word count.
+        rows = [
+            _row("001r", "1", "foo | bar"),
+            _row("001r", "2", "alpha | beta gamma", volpiano="a---b---c7"),
+        ]
+        result = build_flat_text_and_anchors(rows, "001r")
+        assert result.words == ["foo", "bar", "alpha", "beta", "gamma"]
+        assert len(result.anchors) == 1
+        assert result.anchors[0].word_index == 4
+        assert result.anchors[0].anchor_type == "within_chant_7"
