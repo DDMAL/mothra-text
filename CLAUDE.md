@@ -22,6 +22,14 @@ See [DEEP_DIVE.md §13 Pitfalls and Gotchas](DEEP_DIVE.md#13-pitfalls-and-gotcha
 
 Run after any change to `steps/` or `run_pipeline.py`. Run a single test file when faster iteration is needed.
 
+## Lint
+
+`flake8` is the project's linter (config in `.flake8`, `max-line-length = 99`, excludes `experiments/` and `gui/`). Both tests and lint run in CI (`.github/workflows/python-tests.yml`) on any push/PR touching a `.py` file or `requirements.txt`.
+
+```bash
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python -m flake8
+```
+
 ## Key commands
 
 ```bash
