@@ -46,6 +46,7 @@
 10. [Tools and External Dependencies](#10-tools-and-external-dependencies)
 11. [Notable Design Decisions](#11-notable-design-decisions)
 12. [Known Limitations and Future Work](#12-known-limitations-and-future-work)
+    - [Open Follow-ups from the #47 Sweep](#open-follow-ups-from-the-47-sweep)
 13. [Pitfalls and Gotchas](#13-pitfalls-and-gotchas)
 
 ---
@@ -708,6 +709,50 @@ Every step that inherits from `htrflow.pipeline.steps` wraps the import in `try/
 | NW with no volpiano | Folio-start location is approximate; works at line granularity | No clear path; volpiano is the ground-truth structural signal |
 | Word geometry | Character-proportional bbox distribution ignores actual character widths | Would require OCR character-level bounding boxes from Kraken (possible but not currently extracted) |
 | GUI | Deployed build is static; updating requires `npm run build` + push | Already automated via GitHub Actions for `gui/` changes |
+
+### Open Follow-ups from the #47 Sweep
+
+[mothra-text#47](https://github.com/DDMAL/mothra-text/issues/47) was a full-codebase
+production-quality sweep (docs, tests, tidiness, CI). Everything below was deliberately
+**not** done as part of it — noted here so it isn't mistaken for an oversight:
+
+- **argparse boilerplate duplication** between `run_pipeline.py`'s and `run_chain.py`'s
+  `main()` (~10 near-identical flags: `--segmentation-model`, `--recognition-model`,
+  `--stub-mode`, `--device`, `--column-bimodal-threshold`, `--column-count`, `--debug-ocr`,
+  `--padding`, `--skip-masking`, `--output-dir`). Deferred because deduplicating touches both
+  CLI entry points' help text and defaults simultaneously; a follow-up should add
+  argparse-output snapshot tests before refactoring, not after.
+- **`_find_tridis_model()` duplication was investigated, not fixed.** Importing it from
+  `run_pipeline.py` into `run_chain.py` was attempted, then reverted: `run_pipeline.py`
+  unconditionally imports htrflow/kraken/torch at module level, so the import alone added
+  ~5 seconds to every `run_chain.py` invocation, including `--help`. The two copies remain
+  deliberately duplicated (see both functions' docstrings); a real fix would need extracting
+  the lookup into a new dependency-free module, which felt like more structural change than
+  this sweep should make unilaterally.
+- **`run_kraken.py` relocation to `experiments/`** — it's a segmentation-comparison baseline,
+  organizationally misplaced at repo root next to `run_pipeline.py`/`run_chain.py`, but moving
+  it has import-path implications for `experiments/run_all.py` and wasn't treated as
+  mechanical enough to do without a deliberate decision.
+- **GUI test framework bootstrap and all GUI test coverage.** `gui/` has zero test
+  infrastructure (no framework installed, no `test` script in `package.json`) — a capability
+  gap, not a coverage gap. Choosing Vitest vs. Jest, a DOM shim, React Testing Library
+  conventions, and CI wiring deserves its own scoped issue and review rather than being
+  bundled into an already Python-heavy sweep. **A follow-up issue should be filed for this**
+  (not yet done as of this sweep).
+- **`run_kraken.py` and `scripts/*.py` unit test coverage** — deferred as lower risk (neither
+  is in the request-serving path).
+- **`run_pipeline.py`'s full `run()` orchestration** (`export_json`, `_defuse_manifest`,
+  `_split_spanning_nodes_in_tree`, and `run()` end-to-end) remains untested beyond the pure
+  `_music_overlap_ratio` helper and the music-filter block (Tier 1 of the #47 test sweep,
+  `tests/test_run_pipeline.py`) — full orchestration coverage needs either heavy
+  Kraken/HTRflow/Tridis mocking or a lightweight extraction of testable sub-functions,
+  neither attempted here.
+- **The design gap behind the mothra-text/mothra confidence-threshold coordination pitfall**
+  (see [§13](#13-pitfalls-and-gotchas)) is documented and given a regression-guarding test
+  (`tests/test_mothra_mask.py`), but the underlying fix — deciding whether `MothraImageMask`
+  should start reading/filtering on confidence itself, rather than trusting the upstream
+  JSON unconditionally — was not made. That's a behavior change requiring cross-repo
+  coordination with `mothra`'s maintainers, out of scope for a docs/tests/tidy issue.
 
 ---
 
