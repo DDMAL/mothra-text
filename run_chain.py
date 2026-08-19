@@ -268,7 +268,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", force=True)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from run_pipeline import run, export_json, _build_pipeline_payload, _write_mei_json  # noqa: E402
+    from run_pipeline import (  # noqa: E402
+        run, export_json, _build_pipeline_payload, _write_mei_json,
+    )
     from steps.nw_chant_allocator import read_folio_state  # noqa: E402
     from steps.gt_manifest import fetch_cantus_csv, load_local_csv, make_output_stem  # noqa: E402
 

@@ -1,10 +1,9 @@
 """Tests for steps.ground_truth_word_segmentation."""
 
 import logging
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from steps.ground_truth_word_segmentation import (
     GroundTruthWordSegmentation,

@@ -150,7 +150,10 @@ def cluster_columns(
         # region.  Using text_left/text_right (not search boundaries) gives
         # the full column peak even when the valley is near the band edge.
         left_peak = float(smooth[text_left:valley_x].max()) if valley_x > text_left else 0.0
-        right_peak = float(smooth[valley_x + 1:text_right].max()) if valley_x + 1 < text_right else 0.0
+        right_peak = (
+            float(smooth[valley_x + 1:text_right].max())
+            if valley_x + 1 < text_right else 0.0
+        )
         min_peak = min(left_peak, right_peak)
 
         # Bimodal test: valley must be significantly lower than both peaks,

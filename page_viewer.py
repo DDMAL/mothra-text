@@ -101,6 +101,11 @@ def _coords(element, ns: str) -> list[tuple[int, int]]:
     return _parse_points(pts) if pts.strip() else []
 
 
+def _ns_tag(tag: str, ns: str) -> str:
+    """Return tag qualified with the PAGE namespace, if one was detected."""
+    return f"{{{ns}}}{tag}" if ns else tag
+
+
 def parse_page_xml(xml_path: str) -> dict:
     """
     Parse a PAGE XML file and return a dict with keys:
@@ -116,7 +121,7 @@ def parse_page_xml(xml_path: str) -> dict:
     m = re.match(r"\{(.+?)\}", root.tag)
     ns = m.group(1) if m else ""
 
-    page_el = root.find(f"{{{ns}}}Page") if ns else root.find("Page")
+    page_el = root.find(_ns_tag("Page", ns))
     if page_el is None:
         raise ValueError("No <Page> element found in PAGE XML.")
 
@@ -131,7 +136,7 @@ def parse_page_xml(xml_path: str) -> dict:
         "glyphs":    [],
     }
 
-    for region_el in page_el.findall(f"{{{ns}}}TextRegion") if ns else page_el.findall("TextRegion"):
+    for region_el in page_el.findall(_ns_tag("TextRegion", ns)):
         region_id = region_el.get("id", "")
         region = {
             "id":        region_id,
@@ -144,7 +149,7 @@ def parse_page_xml(xml_path: str) -> dict:
         }
         result["regions"].append(region)
 
-        for line_el in region_el.findall(f"{{{ns}}}TextLine") if ns else region_el.findall("TextLine"):
+        for line_el in region_el.findall(_ns_tag("TextLine", ns)):
             line_id = line_el.get("id", "")
             line = {
                 "id":        line_id,
@@ -158,9 +163,10 @@ def parse_page_xml(xml_path: str) -> dict:
             result["lines"].append(line)
 
             # Baseline is a polyline child of TextLine
-            bl_el = line_el.find(f"{{{ns}}}Baseline") if ns else line_el.find("Baseline")
+            bl_el = line_el.find(_ns_tag("Baseline", ns))
             if bl_el is not None:
-                pts = _parse_points(bl_el.get("points", "")) if bl_el.get("points", "").strip() else []
+                bl_points = bl_el.get("points", "")
+                pts = _parse_points(bl_points) if bl_points.strip() else []
                 if pts:
                     result["baselines"].append({
                         "id":        f"{line_id}_baseline",
@@ -172,7 +178,7 @@ def parse_page_xml(xml_path: str) -> dict:
                         "layer":     "baselines",
                     })
 
-            for word_el in line_el.findall(f"{{{ns}}}Word") if ns else line_el.findall("Word"):
+            for word_el in line_el.findall(_ns_tag("Word", ns)):
                 word_id = word_el.get("id", "")
                 word = {
                     "id":        word_id,
@@ -185,7 +191,7 @@ def parse_page_xml(xml_path: str) -> dict:
                 }
                 result["words"].append(word)
 
-                for glyph_el in word_el.findall(f"{{{ns}}}Glyph") if ns else word_el.findall("Glyph"):
+                for glyph_el in word_el.findall(_ns_tag("Glyph", ns)):
                     result["glyphs"].append({
                         "id":        glyph_el.get("id", ""),
                         "type":      "Glyph",
@@ -343,12 +349,24 @@ class PageViewerApp(tk.Tk):
         toolbar = ttk.Frame(self, padding=(6, 4))
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        ttk.Button(toolbar, text="Open XML…",   command=self.open_xml).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Open Image…", command=self.open_image).pack(side=tk.LEFT, padx=2)
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=2)
-        ttk.Button(toolbar, text="Zoom In",     command=lambda: self._zoom(1.2)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Zoom Out",    command=lambda: self._zoom(1 / 1.2)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Reset View",  command=self.reset_view).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            toolbar, text="Open XML…", command=self.open_xml
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            toolbar, text="Open Image…", command=self.open_image
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=6, pady=2
+        )
+        ttk.Button(
+            toolbar, text="Zoom In", command=lambda: self._zoom(1.2)
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            toolbar, text="Zoom Out", command=lambda: self._zoom(1 / 1.2)
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            toolbar, text="Reset View", command=self.reset_view
+        ).pack(side=tk.LEFT, padx=2)
 
         self._status_var = tk.StringVar(value="Open a PAGE XML file to begin.")
         ttk.Label(toolbar, textvariable=self._status_var, foreground="#555555").pack(

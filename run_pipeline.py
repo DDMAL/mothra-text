@@ -80,8 +80,8 @@ from steps.nw_chant_allocator import (  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-from htrflow.utils.geometry import Bbox as _HtBbox
-from htrflow.volume.volume import ImageNode as _HtImageNode
+from htrflow.utils.geometry import Bbox as _HtBbox  # noqa: E402
+from htrflow.volume.volume import ImageNode as _HtImageNode  # noqa: E402
 
 
 class _HtrflowSplitNode(_HtImageNode):

@@ -3,10 +3,7 @@
 from unittest.mock import MagicMock
 
 from steps.nw_chant_allocator import (
-    Anchor,
     ChantSpan,
-    FlatTextData,
-    MidWordBreak,
     build_flat_text_and_anchors,
 )
 

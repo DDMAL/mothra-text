@@ -1,4 +1,5 @@
-"""Convert mothra-text pipeline JSON output to the Text Alignment JSON format expected by MEI encoding."""
+"""Convert mothra-text pipeline JSON output to the Text Alignment JSON
+format expected by MEI encoding."""
 
 import argparse
 import json

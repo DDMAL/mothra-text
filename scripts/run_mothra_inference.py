@@ -120,7 +120,10 @@ def run_inference(image_paths: list[str], out_dir: Path, conf: float = 0.25) -> 
         counts = {1: 0, 2: 0, 3: 0}
         for a in annotations:
             counts[a["classId"]] = counts.get(a["classId"], 0) + 1
-        print(f"{len(annotations)} annotations  (text={counts[1]}, music={counts[2]}, staves={counts[3]})  → {out_path.name}")
+        print(
+            f"{len(annotations)} annotations  (text={counts[1]}, "
+            f"music={counts[2]}, staves={counts[3]})  → {out_path.name}"
+        )
 
 
 def main() -> None:

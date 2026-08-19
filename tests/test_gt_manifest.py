@@ -310,7 +310,6 @@ class TestBuildPageManifest:
         manifest = build_page_manifest(rows, "006r", labels)
         assert manifest["page_region0_line0"] == "standardized beta"
 
-
     def test_mode_star_rows_excluded(self):
         rows = [
             {"folio": "006r", "sequence": "1", "fulltext_standardized": "alpha beta",

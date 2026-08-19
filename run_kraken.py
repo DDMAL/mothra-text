@@ -25,6 +25,7 @@ def _pdf_to_bgr(path):
     code = cv2.COLOR_RGB2BGR if pix.n == 3 else cv2.COLOR_RGBA2BGR
     return cv2.cvtColor(arr, code)
 
+
 FOLIO_DIR = os.path.join(os.path.dirname(__file__), "data", "folios")
 OUT_DIR = os.path.join(os.path.dirname(__file__), "outputs", "kraken_blla")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".pdf"}
