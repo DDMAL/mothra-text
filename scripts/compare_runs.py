@@ -37,7 +37,8 @@ def analyse(path: Path) -> dict:
 
 
 def format_table(rows: list[dict], labels: list[str]) -> str:
-    col_w = [max(len(h), 10) for h in ["Label", "Folio", "Lines", "GT words", "Fallback", "Total words"]]
+    headers = ["Label", "Folio", "Lines", "GT words", "Fallback", "Total words"]
+    col_w = [max(len(h), 10) for h in headers]
     for label, r in zip(labels, rows):
         col_w[0] = max(col_w[0], len(label))
         col_w[1] = max(col_w[1], len(r["folio"]))

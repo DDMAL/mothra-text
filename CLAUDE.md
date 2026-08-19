@@ -10,6 +10,10 @@ Never use `conda run -n line-seg-eval python` — pyenv intercepts `python` and 
 
 The pyenv Python 3.12 has `kraken` but lacks `htrflow`, `biopython`, and `volpiano-display-utilities`. The conda env Python 3.10 has everything.
 
+## Pitfalls
+
+See [DEEP_DIVE.md §13 Pitfalls and Gotchas](DEEP_DIVE.md#13-pitfalls-and-gotchas) for more non-obvious traps: the `snap_window`/`force_window` unified default, the `mothra`-repo confidence-threshold coordination point, the `--column-bimodal-threshold` vs. YOLO `--conf` naming collision, and the two incompatible bbox coordinate formats used across this codebase.
+
 ## Tests
 
 ```bash
@@ -17,6 +21,14 @@ The pyenv Python 3.12 has `kraken` but lacks `htrflow`, `biopython`, and `volpia
 ```
 
 Run after any change to `steps/` or `run_pipeline.py`. Run a single test file when faster iteration is needed.
+
+## Lint
+
+`flake8` is the project's linter (config in `.flake8`, `max-line-length = 99`, excludes `experiments/` and `gui/`). Both tests and lint run in CI (`.github/workflows/python-tests.yml`) on any push/PR touching a `.py` file or `requirements.txt`.
+
+```bash
+/Users/cassiebastress/miniconda3/envs/line-seg-eval/bin/python -m flake8
+```
 
 ## Key commands
 

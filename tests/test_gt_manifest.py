@@ -1,13 +1,17 @@
 """Tests for steps.gt_manifest."""
 
+import codecs
 import logging
-from unittest.mock import MagicMock
+import urllib.error
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from steps.gt_manifest import (
     build_page_manifest,
     clean_text,
+    fetch_cantus_csv,
+    load_local_csv,
     make_manifest_lookup,
     make_output_stem,
     split_by_volpiano,
@@ -306,7 +310,6 @@ class TestBuildPageManifest:
         manifest = build_page_manifest(rows, "006r", labels)
         assert manifest["page_region0_line0"] == "standardized beta"
 
-
     def test_mode_star_rows_excluded(self):
         rows = [
             {"folio": "006r", "sequence": "1", "fulltext_standardized": "alpha beta",
@@ -345,3 +348,89 @@ class TestMakeManifestLookup:
         node = MagicMock()
         node.label = "anything"
         assert lookup(node) is None
+
+
+def _mock_urlopen_response(content_bytes):
+    mock_response = MagicMock()
+    mock_response.read.return_value = content_bytes
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_response
+    mock_cm.__exit__.return_value = False
+    return mock_cm
+
+
+class TestFetchCantusCsv:
+    @pytest.fixture(autouse=True)
+    def _clear_lru_cache(self):
+        # fetch_cantus_csv is @lru_cache'd by source_id -- clear before AND
+        # after each test so results (or a mocked urlopen) from one test
+        # can't leak into another via the cache.
+        fetch_cantus_csv.cache_clear()
+        yield
+        fetch_cantus_csv.cache_clear()
+
+    def test_parses_csv_response_into_dicts(self):
+        csv_bytes = b"folio,sequence,fulltext_ms\n001r,1,alleluia dominus\n"
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_urlopen_response(csv_bytes),
+        ) as mock_urlopen:
+            rows = fetch_cantus_csv(999001)
+        assert rows == [
+            {"folio": "001r", "sequence": "1",
+             "fulltext_ms": "alleluia dominus"}
+        ]
+        requested_url = mock_urlopen.call_args.args[0].full_url
+        assert "999001" in requested_url
+
+    def test_handles_utf8_bom(self):
+        csv_bytes = codecs.BOM_UTF8 + b"folio\n001r\n"
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_urlopen_response(csv_bytes),
+        ):
+            rows = fetch_cantus_csv(999002)
+        assert rows == [{"folio": "001r"}]
+
+    def test_http_error_propagates(self):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                "url", 404, "Not Found", {}, None
+            ),
+        ):
+            with pytest.raises(urllib.error.HTTPError):
+                fetch_cantus_csv(999003)
+
+    def test_result_is_cached_by_source_id(self):
+        csv_bytes = b"folio\n001r\n"
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_mock_urlopen_response(csv_bytes),
+        ) as mock_urlopen:
+            fetch_cantus_csv(999004)
+            fetch_cantus_csv(999004)
+        assert mock_urlopen.call_count == 1
+
+
+class TestLoadLocalCsv:
+    def test_parses_csv_file_into_dicts(self, tmp_path):
+        path = tmp_path / "source.csv"
+        path.write_text("folio,sequence\n001r,1\n002r,2\n", encoding="utf-8")
+        rows = load_local_csv(path)
+        assert rows == [
+            {"folio": "001r", "sequence": "1"},
+            {"folio": "002r", "sequence": "2"},
+        ]
+
+    def test_handles_utf8_bom(self, tmp_path):
+        path = tmp_path / "source_bom.csv"
+        path.write_bytes(codecs.BOM_UTF8 + b"folio\n001r\n")
+        rows = load_local_csv(path)
+        assert rows == [{"folio": "001r"}]
+
+    def test_accepts_string_path(self, tmp_path):
+        path = tmp_path / "source.csv"
+        path.write_text("folio\n001r\n", encoding="utf-8")
+        rows = load_local_csv(str(path))
+        assert rows == [{"folio": "001r"}]

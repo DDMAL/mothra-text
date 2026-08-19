@@ -5,7 +5,7 @@ The primary artifact is `run_pipeline.py`, which runs a folio image through line
 optional Cantus text alignment, and word/syllable geometry generation. Two visualization tools
 (Pipeline Inspector GUI and PAGE XML Viewer) let you inspect the output.
 
-For comparative segmentation experiments and PyLaia baselines, see [`experiments/README.md`](experiments/README.md).
+For comparative segmentation experiments, see [`experiments/README.md`](experiments/README.md).
 
 ---
 
@@ -129,6 +129,9 @@ python run_chain.py \
 | `--export-json PATH [...]` | One pipeline inspector JSON path per folio; parent dirs created automatically |
 | `--folio-states-dir PATH` | Save intermediate `state_{folio}.json` files here for debugging |
 | `--debug-ocr` | Print per-line OCR and NW alignment detail for every folio |
+| `--mothra-jsons-dir PATH` | Directory containing mothra annotation JSONs named `{image_stem}.json`, one per folio (produced by `scripts/run_mothra_inference.py --out-dir`). Masks each folio's image before segmentation; a missing per-folio JSON logs a warning and runs that folio unmasked. |
+| `--padding PX` | Pixels added around each text bbox before masking (default 15). Only used when `--mothra-jsons-dir` is given. |
+| `--skip-masking` | Skip text-region masking even if `--mothra-jsons-dir` is given. |
 
 All model and device flags from `run_pipeline.py` (`--segmentation-model`,
 `--recognition-model`, `--device`, `--stub-mode`, `--column-count`,
@@ -167,6 +170,7 @@ python run_pipeline.py \
 |---|---|
 | `--mothra-json PATH` | Mothra annotation JSON for this folio. Blacks out non-text regions before line segmentation. Omit to run without masking. |
 | `--padding PX` | Pixels added around each text bbox before masking (default 15). |
+| `--skip-masking` | Skip text-region masking even if `--mothra-json` is given. |
 
 **Programmatic usage:** masking is also available when calling `run()` directly
 as a library:
@@ -213,6 +217,14 @@ collection, manifest = run(
 
 Compare results with `scripts/compare_runs.py`. Load all output JSONs into the
 Pipeline Inspector GUI for visual comparison.
+
+**How this repo is invoked in production:** the `--mothra-json`/`mothra_json_path` and
+`music_boxes` inputs described in 1b/1c above are exactly what the [`mothra`](https://github.com/DDMAL/mothra)
+landing-page repo's `text-service/main.py` passes to this repo's `run()` over an internal HTTP
+call — `mothra-text` is included there as a git submodule. See
+[DEEP_DIVE.md §9a](DEEP_DIVE.md#9a-relationship-to-the-mothra-repo-landing-page--text-service)
+for a summary of that integration, and [DDMAL/mothra#151](https://github.com/DDMAL/mothra/issues/151)
+for the full architecture write-up.
 
 ---
 
@@ -261,6 +273,9 @@ Utility and conversion scripts in `scripts/`:
 | `mothra_to_page.py` | Convert Mothra Annotator JSON → PAGE XML (for BLLA training data) |
 | `convert_to_mei_input.py` | Convert pipeline JSON → MEI Text Alignment JSON |
 | `debug_column_detection.py` | Visualize bimodal column detection coverage profile |
+| `run_mothra_inference.py` | Run YOLOv11 mothra models over folio images → mothra annotation JSON |
+| `compare_runs.py` | Compare pipeline output JSONs across different approaches/runs |
+| `visualize_mothra.py` | Overlay mothra annotation bboxes on a folio image |
 
 See [`scripts/README.md`](scripts/README.md) for usage.
 
@@ -274,8 +289,7 @@ mothra-text/
 │   ├── README.md                   # experiments documentation
 │   ├── run_htrflow.py              # YOLO/RTMDet segmentation runner
 │   ├── run_all.py                  # runs all three models
-│   ├── pipelines/                  # htrflow YAML configs for YOLO and RTMDet
-│   └── pylaia_baseline/            # zero-shot PyLaia HTR baselines
+│   └── pipelines/                  # htrflow YAML configs for YOLO and RTMDet
 ├── gui/                            # Pipeline Inspector browser app
 │   └── README.md
 ├── scripts/                        # utility and conversion scripts
@@ -286,15 +300,34 @@ mothra-text/
 │   ├── gt_manifest.py
 │   ├── kraken_recognition.py
 │   ├── kraken_segmentation.py
+│   ├── mothra_mask.py
 │   ├── nw_chant_allocator.py
 │   ├── syllable_segmentation.py
 │   └── README.md
+├── docs/                           # user-facing documentation
+│   ├── user_guide.md
+│   └── user_decision_tree.md
 ├── tests/                          # pytest suite (200+ tests)
 ├── page_viewer.py                  # PAGE XML Viewer desktop GUI
 ├── run_kraken.py                   # standalone Kraken BLLA runner + visualization
 ├── run_pipeline.py                 # end-to-end pipeline (single folio)
 └── run_chain.py                    # automated multi-folio chaining wrapper
 ```
+
+---
+
+## Documentation
+
+| Doc | Covers |
+|---|---|
+| [`DEEP_DIVE.md`](DEEP_DIVE.md) | Full architecture deep dive: every pipeline stage, key data structures, known limitations, and pitfalls/gotchas |
+| [`steps/README.md`](steps/README.md) | Per-module reference for `steps/` |
+| [`docs/user_guide.md`](docs/user_guide.md) | Troubleshooting and CLI option reference for end users |
+| [`docs/user_decision_tree.md`](docs/user_decision_tree.md) | GUI flag mapping and a decision tree for choosing pipeline options |
+| [`gui/README.md`](gui/README.md) | Pipeline Inspector GUI usage and local development |
+| [`scripts/README.md`](scripts/README.md) | Utility/conversion script reference |
+| [`experiments/README.md`](experiments/README.md) | Comparative segmentation research (not part of the main pipeline) |
+| [DDMAL/mothra#151](https://github.com/DDMAL/mothra/issues/151) (external) | Full architecture write-up of how the `mothra` landing-page repo integrates this repo in production — see also [DEEP_DIVE.md §9a](DEEP_DIVE.md#9a-relationship-to-the-mothra-repo-landing-page--text-service) |
 
 ---
 
@@ -328,7 +361,7 @@ All dependencies (including transitive) are pinned in `requirements.txt`. To upd
 after adding a new package, re-run `pip freeze > requirements.txt` in the active conda
 env and commit the result.
 
-For experiment-specific dependencies (OpenMMLab stack for RTMDet, PyLaia environment),
+For experiment-specific dependencies (OpenMMLab stack for RTMDet),
 see [`experiments/README.md`](experiments/README.md).
 
 ---

@@ -61,7 +61,14 @@ def _are_contiguous(a: str, b: str) -> bool:
 
 
 def _find_tridis_model() -> "str | None":
-    """Return the local path to the Tridis model, or None if not installed."""
+    """Return the local path to the Tridis model, or None if not installed.
+
+    Deliberately duplicated from run_pipeline.py rather than imported: this
+    runs before argparse (to set --recognition-model's default), and
+    `import run_pipeline` pulls in htrflow/kraken/torch, adding several
+    seconds to every invocation including `--help` and argument-validation
+    errors. Keep both copies in sync if the lookup logic ever changes.
+    """
     try:
         from platformdirs import user_data_dir
         htrmopo_dir = Path(user_data_dir("htrmopo"))
@@ -261,7 +268,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", force=True)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from run_pipeline import run, export_json, _build_pipeline_payload, _write_mei_json  # noqa: E402
+    from run_pipeline import (  # noqa: E402
+        run, export_json, _build_pipeline_payload, _write_mei_json,
+    )
     from steps.nw_chant_allocator import read_folio_state  # noqa: E402
     from steps.gt_manifest import fetch_cantus_csv, load_local_csv, make_output_stem  # noqa: E402
 

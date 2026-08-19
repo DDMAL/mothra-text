@@ -626,8 +626,8 @@ def allocate_lines(
     column_count: int = 1,
     left_column_count: int = 0,
     search_window: int = 40,
-    snap_window: int = 1,
-    force_window: int = 0,
+    snap_window: int = 2,
+    force_window: int = 10,
     match_score: float = 8.0,
     mismatch_score: float = -5.0,
     open_penalty: float = -7.0,
@@ -938,6 +938,18 @@ def allocate_lines(
                     _prev_lbls = _fused_prev.constituent_labels
                     _prev_ws = _fused_prev.constituent_widths
                     _fstart = first_folio_span.start_word
+                    # Joint grid search over (split index k, word count n).
+                    # k is where in this fused line's constituents the
+                    # previous folio's suffix ends and this folio's first
+                    # chant begins; n is how many of this folio's first
+                    # words we're testing for. Neither can be fixed
+                    # independently — a larger n needs a smaller k (fewer
+                    # right-hand constituents to hold more words) and vice
+                    # versa — so every (k, n) pair in range is scored via NW
+                    # against the right-hand OCR and the best-scoring pair
+                    # wins. Both axes are capped at mixed_line_n_words to
+                    # keep this bounded (see steps/README.md's Mixed-line
+                    # detection section for the feature-level description).
                     _n_try = min(
                         mixed_line_n_words, len(_prev_lbls) - 1
                     )
@@ -973,6 +985,11 @@ def allocate_lines(
                                 _best_ml = _ms
                                 _best_ml_k = _mk
                                 _best_ml_n = _mn
+                    # Require a real suffix (_ml_suf) in addition to the
+                    # score/k checks: without prior-folio words to assign
+                    # to the left-hand constituents, there is nothing to
+                    # split "left vs. right" — the override would just be
+                    # this folio's words duplicated onto an empty left side.
                     if (
                         _best_ml >= mixed_line_min_score
                         and _best_ml_k is not None

@@ -14,7 +14,6 @@ the GroundTruthLookup callable expected by GroundTruthWordSegmentation.
 import csv
 import functools
 import io
-import json
 import logging
 import re
 import urllib.request
@@ -283,5 +282,3 @@ def load_local_csv(path: str | Path) -> list[dict]:
     """Load a local Cantus-format CSV file as a list of dicts."""
     with open(path, encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
-
-

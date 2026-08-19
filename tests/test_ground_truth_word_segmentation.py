@@ -1,13 +1,14 @@
 """Tests for steps.ground_truth_word_segmentation."""
 
 import logging
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from steps.ground_truth_word_segmentation import (
     GroundTruthWordSegmentation,
+    _bbox_word_segmentation,
+    _fallback_word_segmentation,
     _ground_truth_word_segmentation,
 )
 
@@ -135,3 +136,76 @@ class TestGroundTruthWordSegmentationStep:
             step.run(collection)
 
         mock_fallback.assert_called_once_with(node)
+
+
+# ---------------------------------------------------------------------------
+# _bbox_word_segmentation / _fallback_word_segmentation
+#
+# The step-level tests above always mock _fallback_word_segmentation out,
+# so its actual geometry math and empty-text guard were never executed by
+# the suite. These call the real functions directly.
+# ---------------------------------------------------------------------------
+
+class TestBboxWordSegmentation:
+    def test_segment_count_matches_word_count(self):
+        node = make_node(width=100, height=30)
+        result = _bbox_word_segmentation(node, ["ab", "cd"], "ab cd")
+        assert len(result.segments) == 2
+
+    def test_words_and_bboxes_are_left_to_right_in_order(self):
+        node = make_node(width=100, height=30)
+        result = _bbox_word_segmentation(node, ["ab", "cd"], "ab cd")
+        words = [
+            seg.data[TEXT_RESULT_KEY].top_candidate()
+            for seg in result.segments
+        ]
+        assert words == ["ab", "cd"]
+        # chars=5, pixels_per_char=max(1, 100//5)=20.
+        # "ab": x2=min(0+20*3,100)=60 -> bbox (0,0,60,30).
+        # "cd": x1=60, x2=min(60+20*3,100)=100 -> bbox (60,0,100,30).
+        first, second = result.segments
+        assert (first.bbox.xmin, first.bbox.xmax) == (0, 60)
+        assert (second.bbox.xmin, second.bbox.xmax) == (60, 100)
+
+    def test_single_word_spans_full_width(self):
+        node = make_node(width=80, height=20)
+        result = _bbox_word_segmentation(node, ["alleluia"], "alleluia")
+        assert len(result.segments) == 1
+        assert result.segments[0].bbox.xmax == 80
+
+
+class TestFallbackWordSegmentation:
+    def test_splits_recognised_text_into_words(self):
+        node = make_node(text="dominus omnipotens", width=300, height=30)
+        result = _fallback_word_segmentation(node)
+        words = [
+            seg.data[TEXT_RESULT_KEY].top_candidate()
+            for seg in result.segments
+        ]
+        assert words == ["dominus", "omnipotens"]
+
+    def test_empty_text_produces_one_empty_word_segment(self):
+        # text="" -> words=text.split()=[] -> falls to `[text] if text
+        # else [""]`; text is falsy, so this is [""], not [text].
+        node = make_node(text="", width=50, height=20)
+        result = _fallback_word_segmentation(node)
+        assert len(result.segments) == 1
+        assert result.segments[0].data[TEXT_RESULT_KEY].top_candidate() == ""
+
+    def test_none_text_is_treated_like_empty_text(self):
+        node = make_node(text=None, width=50, height=20)
+        result = _fallback_word_segmentation(node)
+        assert len(result.segments) == 1
+        assert result.segments[0].data[TEXT_RESULT_KEY].top_candidate() == ""
+
+    def test_whitespace_only_text_is_kept_as_a_single_word(self):
+        # text="   " -> text.split()=[] -> falls to `[text] if text else
+        # [""]`; text is truthy (non-empty string), so the whole
+        # whitespace string becomes the sole "word" verbatim, unlike the
+        # fully-empty-text case above.
+        node = make_node(text="   ", width=50, height=20)
+        result = _fallback_word_segmentation(node)
+        assert len(result.segments) == 1
+        assert (
+            result.segments[0].data[TEXT_RESULT_KEY].top_candidate() == "   "
+        )

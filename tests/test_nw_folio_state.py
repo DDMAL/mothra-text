@@ -3,12 +3,10 @@
 import json
 
 from steps.nw_chant_allocator import (
-    Anchor,
     AllocationResult,
     ChantSpan,
     FlatTextData,
     FolioState,
-    ValidationFlag,
     allocate_lines,
     build_flat_text_and_anchors,
     build_folio_state,
@@ -90,7 +88,7 @@ class TestBuildFolioState:
             ChantSpan(sequence=3, start_word=0, end_word=2),
             ChantSpan(sequence=5, start_word=2, end_word=5),
         ]
-        flat = FlatTextData(words=["a","b","c","d","e"], anchors=[], chant_spans=spans)
+        flat = FlatTextData(words=["a", "b", "c", "d", "e"], anchors=[], chant_spans=spans)
         # pointer_end=4: inside span with sequence=5
         result = _result(pointer_end=4)
         state = build_folio_state(flat, result, source_id=None, folio="001r")

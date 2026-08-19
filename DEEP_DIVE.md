@@ -42,9 +42,12 @@
    - [scripts/run_mothra_inference.py](#scriptsrun_mothra_inferencepy)
    - [scripts/visualize_mothra.py](#scriptsvisualize_mothrapy)
    - [scripts/compare_runs.py](#scriptscompare_runspy)
+   - [9a. Relationship to the mothra Repo (Landing Page / text-service)](#9a-relationship-to-the-mothra-repo-landing-page--text-service)
 10. [Tools and External Dependencies](#10-tools-and-external-dependencies)
 11. [Notable Design Decisions](#11-notable-design-decisions)
 12. [Known Limitations and Future Work](#12-known-limitations-and-future-work)
+    - [Open Follow-ups from the #47 Sweep](#open-follow-ups-from-the-47-sweep)
+13. [Pitfalls and Gotchas](#13-pitfalls-and-gotchas)
 
 ---
 
@@ -52,7 +55,7 @@
 
 The repo implements an end-to-end pipeline that takes a photograph of a medieval chant manuscript folio and produces syllable-level bounding boxes annotated with Cantus Database text. The primary output is a JSON file consumable by the Pipeline Inspector GUI (and separately by the MEI encoding workflow). The end goal is aligning the neume notation in manuscript images with the syllabic text of the chant, enabling musicological research and digital edition work.
 
-Two older sub-projects (YOLO/RTMDet segmentation model comparison and PyLaia HTR baselines) now live in `experiments/` and are no longer part of the main pipeline.
+An older sub-project (YOLO/RTMDet segmentation model comparison) now lives in `experiments/` and is no longer part of the main pipeline.
 
 **Artifact map:**
 
@@ -180,8 +183,9 @@ In **Cantus-aligned mode**, this is the most complex stage. See Section 5 for a 
 
 1. `build_flat_text_and_anchors()` flattens all chant CSV rows for the folio into a single ordered word list, extracting volpiano break positions as `Anchor` objects.
 2. `fuse_colinear_segments()` produces fused OCR texts (concatenated constituent texts).
-3. `allocate_lines()` maps each fused line label to a word span using Needleman-Wunsch alignment.
-4. `_defuse_manifest()` distributes words back to constituent node labels proportionally by pixel width.
+3. **Pre-NW music-region filter** (optional, library callers only — not exposed as a CLI flag): when `music_boxes` (YOLO-detected stave/neume bounding boxes, absolute pixel `[x0, y0, x1, y1]` coordinates) is passed to `run()`, any fused line whose bbox overlaps a music region by more than `music_overlap_threshold` (default 0.30, strict `>`) of the line's own area is dropped from `sorted_labels` before NW alignment runs. This prevents spurious BLLA baselines near music staves from consuming ground-truth word slots and shifting every subsequent line off by one. Dropped nodes are recorded on `collection._music_filter_dropped`. Only `text-service/main.py` (the mothra API layer) passes `music_boxes`; CLI runs and `run_chain.py` pass `music_boxes=None` and are unaffected.
+4. `allocate_lines()` maps each fused line label to a word span using Needleman-Wunsch alignment.
+5. `_defuse_manifest()` distributes words back to constituent node labels proportionally by pixel width.
 
 **Output:** `manifest: dict[str, str]` — original node label → Cantus word fragment.
 
@@ -257,8 +261,7 @@ line-seg-eval/
 │   ├── README.md
 │   ├── run_htrflow.py          # YOLO/RTMDet runner
 │   ├── run_all.py              # runs all three models
-│   ├── pipelines/              # htrflow YAML configs
-│   └── pylaia_baseline/        # PyLaia HTR experiments
+│   └── pipelines/              # htrflow YAML configs
 │
 └── tests/                      # pytest suite (200+ tests)
 ```
@@ -602,6 +605,40 @@ python scripts/compare_runs.py \
 
 ---
 
+## 9a. Relationship to the `mothra` Repo (Landing Page / text-service)
+
+Section 9 above covers a *different* axis of "mothra integration" — this repo *consuming* mothra's
+YOLO annotation-JSON format via `MothraImageMask`/`scripts/run_mothra_inference.py`. This section
+covers the *other* direction: how the separate [`mothra`](https://github.com/DDMAL/mothra) repo
+(the landing-page application) invokes `mothra-text` in production.
+
+`mothra` includes `mothra-text` as a git submodule pinned at a specific commit. The landing
+page's PostgreSQL `annotations` table (populated by its own YOLO inference step) feeds
+`landing-page/scripts/text_api.py`, which builds a mask JSON (equivalent to this repo's
+`--mothra-json`) and a music-box list from the stored detections. Those cross an HTTP boundary —
+a POST to `text-service` on `:8002/run` — where `text-service/main.py` writes the mask JSON to a
+temp file and calls this repo's `run()` directly. From that point on, the integrated path and the
+CLI path are running identical code on identical inputs. Results are written to the landing
+page's `text_alignments` table.
+
+One asymmetry worth knowing: `text-service` performs its own post-`run()` music-box filter step
+(`filter_lines_over_music()`) that does **not** exist anywhere in `mothra-text`'s own CLI or
+library surface — don't assume the CLI fully represents production behavior when debugging a
+discrepancy between a local run and the live landing page.
+
+See the confidence-threshold coordination note in [§13 Pitfalls and Gotchas](#13-pitfalls-and-gotchas)
+for a concrete example of how these two paths can silently diverge.
+
+**This section is intentionally a short summary, not the full picture** — the authoritative
+architecture diagram and write-up (PostgreSQL schema, the exact `text_api.py` mask/music-box
+construction, coordinate translation between YOLO's normalized floats and `MothraImageMask`'s
+pixel integers, and the full behavior-comparison table) lives at
+[DDMAL/mothra#151](https://github.com/DDMAL/mothra/issues/151). Keep it that way — duplicating
+the full write-up here would create exactly the kind of doc/code drift this sweep (mothra-text#47)
+was written to fix.
+
+---
+
 ## 10. Tools and External Dependencies
 
 | Dependency | What it does | Where used |
@@ -672,3 +709,95 @@ Every step that inherits from `htrflow.pipeline.steps` wraps the import in `try/
 | NW with no volpiano | Folio-start location is approximate; works at line granularity | No clear path; volpiano is the ground-truth structural signal |
 | Word geometry | Character-proportional bbox distribution ignores actual character widths | Would require OCR character-level bounding boxes from Kraken (possible but not currently extracted) |
 | GUI | Deployed build is static; updating requires `npm run build` + push | Already automated via GitHub Actions for `gui/` changes |
+
+### Open Follow-ups from the #47 Sweep
+
+[mothra-text#47](https://github.com/DDMAL/mothra-text/issues/47) was a full-codebase
+production-quality sweep (docs, tests, tidiness, CI). Everything below was deliberately
+**not** done as part of it — noted here so it isn't mistaken for an oversight:
+
+- **argparse boilerplate duplication** between `run_pipeline.py`'s and `run_chain.py`'s
+  `main()` (~10 near-identical flags: `--segmentation-model`, `--recognition-model`,
+  `--stub-mode`, `--device`, `--column-bimodal-threshold`, `--column-count`, `--debug-ocr`,
+  `--padding`, `--skip-masking`, `--output-dir`). Deferred because deduplicating touches both
+  CLI entry points' help text and defaults simultaneously; a follow-up should add
+  argparse-output snapshot tests before refactoring, not after.
+- **`_find_tridis_model()` duplication was investigated, not fixed.** Importing it from
+  `run_pipeline.py` into `run_chain.py` was attempted, then reverted: `run_pipeline.py`
+  unconditionally imports htrflow/kraken/torch at module level, so the import alone added
+  ~5 seconds to every `run_chain.py` invocation, including `--help`. The two copies remain
+  deliberately duplicated (see both functions' docstrings); a real fix would need extracting
+  the lookup into a new dependency-free module, which felt like more structural change than
+  this sweep should make unilaterally.
+- **`run_kraken.py` relocation to `experiments/`** — it's a segmentation-comparison baseline,
+  organizationally misplaced at repo root next to `run_pipeline.py`/`run_chain.py`, but moving
+  it has import-path implications for `experiments/run_all.py` and wasn't treated as
+  mechanical enough to do without a deliberate decision.
+- **GUI test framework bootstrap and all GUI test coverage.** `gui/` has zero test
+  infrastructure (no framework installed, no `test` script in `package.json`) — a capability
+  gap, not a coverage gap. Choosing Vitest vs. Jest, a DOM shim, React Testing Library
+  conventions, and CI wiring deserves its own scoped issue and review rather than being
+  bundled into an already Python-heavy sweep. **A follow-up issue should be filed for this**
+  (not yet done as of this sweep).
+- **`run_kraken.py` and `scripts/*.py` unit test coverage** — deferred as lower risk (neither
+  is in the request-serving path).
+- **`run_pipeline.py`'s full `run()` orchestration** (`export_json`, `_defuse_manifest`,
+  `_split_spanning_nodes_in_tree`, and `run()` end-to-end) remains untested beyond the pure
+  `_music_overlap_ratio` helper and the music-filter block (Tier 1 of the #47 test sweep,
+  `tests/test_run_pipeline.py`) — full orchestration coverage needs either heavy
+  Kraken/HTRflow/Tridis mocking or a lightweight extraction of testable sub-functions,
+  neither attempted here.
+- **The design gap behind the mothra-text/mothra confidence-threshold coordination pitfall**
+  (see [§13](#13-pitfalls-and-gotchas)) is documented and given a regression-guarding test
+  (`tests/test_mothra_mask.py`), but the underlying fix — deciding whether `MothraImageMask`
+  should start reading/filtering on confidence itself, rather than trusting the upstream
+  JSON unconditionally — was not made. That's a behavior change requiring cross-repo
+  coordination with `mothra`'s maintainers, out of scope for a docs/tests/tidy issue.
+
+---
+
+## 13. Pitfalls and Gotchas
+
+Non-obvious behavior and easy-to-conflate concepts that have caused (or could cause) real
+confusion for a future developer or an LLM working in this codebase.
+
+### `snap_window` / `force_window` now share one default (2/10)
+
+`allocate_lines()`'s `snap_window`/`force_window` parameters (see [§5b](#5b-allocate_lines--the-nw-allocation-loop))
+default to `2`/`10` — the same tolerance values the one production call site
+(`run_pipeline.py`) actually runs with. This matters because `allocate_lines()` is a public
+function other callers (tests, a future integration) might invoke directly: before this was
+unified, a direct caller silently got weaker snapping (`force_window=0`, i.e. mid-chant
+force-snap disabled) than the CLI, with nothing in the code or docs flagging the difference.
+
+### Confidence-threshold coordination between mothra-text and `mothra`
+
+`MothraImageMask.apply()` (`steps/mothra_mask.py`) never reads or filters on the mothra JSON's
+confidence field — it trusts whatever detections are in the JSON, whole-cloth, regardless of
+score. Until 2026-08-18, this was a *live, confirmed* discrepancy: `scripts/run_mothra_inference.py`
+defaults `--conf` to `0.25`, while the `mothra` (landing-page) repo's production inference
+defaulted to `0.5` — meaning detections scoring 0.25–0.49 were silently present in CLI-generated
+masks but absent from production ones (root-caused in
+[mothra#151](https://github.com/DDMAL/mothra/issues/151)). It was fixed in
+[mothra#244](https://github.com/DDMAL/mothra/pull/244), which changed the production default to
+match mothra-text's `0.25`. **The underlying design gap remains**: `mothra-text` has no way to
+detect a threshold mismatch on its own side. If the two repos' defaults ever drift apart again,
+nothing here will notice — this is a coordination point to keep in mind, not a solved problem.
+
+### `--column-bimodal-threshold` vs. YOLO `--conf` — different systems, similar names
+
+`--column-bimodal-threshold` (default `0.5`, `column_clustering.py`) controls the two-column
+detection valley/peak ratio. YOLO `--conf` (default `0.25`, `scripts/run_mothra_inference.py`)
+controls detection confidence filtering. They are unrelated systems that both get called
+"threshold"/"conf" in nearby contexts (masking and layout discussions) — easy to conflate when
+skimming code or docs; check which module a bare "threshold" mention actually refers to.
+
+### Two incompatible bbox coordinate formats
+
+Mothra annotation JSON bboxes are `[x, y, width, height]` (see the
+[Mothra annotation JSON schema](#mothra-annotation-json-schema)), but this pipeline's own JSON
+output and the `music_boxes` parameter both use `[x0, y0, x1, y1]` absolute corners (see
+[§2 Stage 4](#stage-4--nw-chant-allocator-allocate_lines-or-ocr-only-mode) and the
+[Pipeline JSON output schema](#pipeline-json-output-schema)). Each format is documented correctly
+in its own section, but nothing previously flagged them together — don't assume a `bbox`/`box`
+value uses one format just because a nearby one does; check which schema you're actually in.
