@@ -25,7 +25,18 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          # mmcv==2.0.1's setup.py imports pkg_resources, which recent
+          # setuptools no longer bundles by default; pin an older
+          # setuptools for the OpenMMLab family and build them without
+          # isolation so they use it instead of a fresh (broken) isolated
+          # build env. See experiments/README.md's mmcv install note.
+          pip install "setuptools<81" wheel
+          pip install --no-build-isolation mmengine==0.10.7
+          pip install --no-build-isolation mmcv==2.0.1
+          pip install --no-build-isolation mmdet==3.1.0
+          pip install --no-build-isolation mmocr==1.0.1
+          pip install -r requirements.txt
       - name: Run tests
         run: pytest tests/ -v
       - name: Lint
