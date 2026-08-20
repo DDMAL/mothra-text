@@ -8,7 +8,9 @@ from steps.nw_chant_allocator import (
     ChantSpan,
     FlatTextData,
     MidWordBreak,
+    _page_line_scale,
     _split_word_at_syl_boundary,
+    _usable_ocr_chars,
     allocate_lines,
     locate_first_chant_line,
 )
@@ -1288,3 +1290,366 @@ class TestMixedLineDetection:
         assert "mixed_start_detected" not in flag_types
         # NW starts at word 0 — no cascade shift.
         assert result.manifest["line1"] == "alleluia dominus"
+
+
+# ---------------------------------------------------------------------------
+# Misdetected-line skipping (issue #46)
+# ---------------------------------------------------------------------------
+
+# Three full-width reference lines give _page_line_scale a trustworthy page
+# scale.  With ref_width=1500px and the densest reference line averaging
+# 1500/32 ≈ 47px per character, a 60px box holds ~1.3 characters — nowhere
+# near enough for the multi-word spans the allocator wants to put in it.
+_REF_WIDTH = 1500
+_NARROW = 60
+_W0 = ["alphabetum", "beatissimus", "confessorum"]
+_W1 = ["seculorum", "amenissimo", "venerandus"]
+_W2 = ["dominusque", "exultemus", "gloriosus"]
+_W3 = ["laudemus", "canticum", "novum"]
+
+
+def _misdetect_flat(anchors=True):
+    """Nine words; anchors at 3 and 6 so each line closes on a word group."""
+    return FlatTextData(
+        words=_W0 + _W1 + _W2,
+        anchors=(
+            [Anchor(3, "within_chant_7"), Anchor(6, "within_chant_7")]
+            if anchors else []
+        ),
+        chant_spans=[ChantSpan(1, 0, 9)],
+    )
+
+
+def _misdetect_page(phantom_width=_NARROW, phantom_ocr=""):
+    """ref0, a narrow empty-OCR phantom, then ref1 and ref2."""
+    labels = ["ref0", "phantom", "ref1", "ref2"]
+    fused = [
+        _make_fused("ref0", ["s0"], [_REF_WIDTH]),
+        _make_fused("phantom", ["s1"], [phantom_width]),
+        _make_fused("ref1", ["s2"], [_REF_WIDTH]),
+        _make_fused("ref2", ["s3"], [_REF_WIDTH]),
+    ]
+    ocr = {
+        "ref0": " ".join(_W0),
+        "phantom": phantom_ocr,
+        "ref1": " ".join(_W1),
+        "ref2": " ".join(_W2),
+    }
+    return labels, fused, ocr
+
+
+def _one_word_page(phantom_width):
+    """Phantom is offered exactly one word ('iactatus', 8 chars).
+
+    At 400px the box can hold it (8.5 char capacity vs a 3.2 char
+    threshold) and must be kept; at 69px it cannot (1.5 chars) and must be
+    skipped.  This pair pins misdetect_min_words=1: a word count alone
+    cannot tell the two apart, only capacity can.
+    """
+    flat = FlatTextData(
+        words=_W0 + ["iactatus"] + _W1 + _W2,
+        anchors=[
+            Anchor(3, "within_chant_7"),
+            Anchor(4, "within_chant_7"),
+            Anchor(7, "within_chant_7"),
+        ],
+        chant_spans=[ChantSpan(1, 0, 13)],
+    )
+    labels = ["ref0", "phantom", "ref1", "ref2"]
+    fused = [
+        _make_fused("ref0", ["s0"], [_REF_WIDTH]),
+        _make_fused("phantom", ["s1"], [phantom_width]),
+        _make_fused("ref1", ["s2"], [_REF_WIDTH]),
+        _make_fused("ref2", ["s3"], [_REF_WIDTH]),
+    ]
+    ocr = {
+        "ref0": " ".join(_W0),
+        "phantom": "",
+        "ref1": " ".join(_W1),
+        "ref2": " ".join(_W2),
+    }
+    return flat, labels, fused, ocr
+
+
+class TestPageLineScale:
+    """Unit tests for the page-geometry helpers."""
+
+    def test_punctuation_only_ocr_counts_as_no_text(self):
+        assert _usable_ocr_chars("„") == 0
+        assert _usable_ocr_chars(" . - ") == 0
+        assert _usable_ocr_chars("") == 0
+        assert _usable_ocr_chars(None) == 0
+        assert _usable_ocr_chars("ab1") == 3
+
+    def test_returns_none_with_too_few_reference_lines(self):
+        fused = [
+            _make_fused("a", ["s0"], [1000]),
+            _make_fused("b", ["s1"], [1000]),
+        ]
+        ocr = {"a": "alphabetum", "b": "beatissimus"}
+        assert _page_line_scale(fused, ocr) == (None, None)
+
+    def test_returns_none_when_all_ocr_empty(self):
+        # Global stub mode: no line qualifies as a reference line.
+        _, fused, _ = _misdetect_page()
+        ocr = {f.label: "" for f in fused}
+        assert _page_line_scale(fused, ocr) == (None, None)
+
+    def test_median_width_and_narrowest_char_width(self):
+        fused = [
+            _make_fused("a", ["s0"], [1000]),
+            _make_fused("b", ["s1"], [1200]),
+            _make_fused("c", ["s2"], [1400]),
+        ]
+        # 10 alnum chars each → 100, 120 and 140 px per character.
+        ocr = {k: "abcdefghij" for k in ("a", "b", "c")}
+        ref_width, px_per_char = _page_line_scale(fused, ocr)
+        assert ref_width == 1200
+        assert px_per_char == 100
+
+    def test_short_ocr_lines_are_not_reference_lines(self):
+        fused = [
+            _make_fused("a", ["s0"], [1000]),
+            _make_fused("b", ["s1"], [1000]),
+            _make_fused("c", ["s2"], [1000]),
+            _make_fused("tiny", ["s3"], [20]),
+        ]
+        ocr = {
+            "a": "abcdefghij", "b": "abcdefghij", "c": "abcdefghij",
+            "tiny": "ab",
+        }
+        ref_width, px_per_char = _page_line_scale(fused, ocr)
+        # The 20px box would otherwise drag both statistics down.
+        assert ref_width == 1000
+        assert px_per_char == 100
+
+
+class TestMisdetectedLineSkip:
+    """Tests for skipping non-text boxes during allocation (issue #46)."""
+
+    # ------------------------------------------------------------------
+    # The core scenario, in both stub-mode demand paths
+    # ------------------------------------------------------------------
+
+    def test_words_go_to_next_line_in_anchor_advance_path(self):
+        # Without the veto the phantom stub-advances to the anchor at word
+        # 6 and swallows _W1, shifting every later line.
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+        )
+        assert result.manifest["phantom"] == ""
+        assert result.manifest["ref0"] == " ".join(_W0)
+        assert result.manifest["ref1"] == " ".join(_W1)
+        assert result.manifest["ref2"] == " ".join(_W2)
+
+    def test_words_go_to_next_line_in_uniform_fallback_path(self):
+        # No volpiano: demand comes from the uniform-distribution fallback
+        # instead of an anchor advance, and the veto must still fire.
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(anchors=False), labels, ocr,
+            fused_lines=fused, locate_folio_start=False,
+        )
+        assert result.manifest["phantom"] == ""
+        assert result.manifest["ref1"] == " ".join(_W1)
+        assert result.manifest["ref2"] == " ".join(_W2)
+
+    def test_flag_and_skipped_labels_recorded(self):
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+        )
+        assert result.skipped_labels == ["phantom"]
+        skips = [
+            f for f in result.flags
+            if f.flag_type == "misdetected_line_skipped"
+        ]
+        assert len(skips) == 1
+        assert "phantom" in skips[0].detail
+
+    def test_pointer_not_advanced_and_all_words_allocated(self):
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+        )
+        assert result.text_pointer_end == 9
+        assert not any(
+            f.flag_type == "line_count_mismatch" for f in result.flags
+        )
+
+    def test_debug_entry_records_the_skip(self):
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused, debug=True,
+        )
+        entry = next(
+            e for e in result.debug_lines if e["label"] == "phantom"
+        )
+        assert entry["consumed"] == 0
+        assert entry["pointer_start"] == entry["pointer_end"]
+        assert "misdetected" in entry["alignment"]
+
+    # ------------------------------------------------------------------
+    # misdetect_min_words=1: capacity, not word count, does the work
+    # ------------------------------------------------------------------
+
+    def test_single_word_demand_that_fits_is_kept(self):
+        flat, labels, fused, ocr = _one_word_page(phantom_width=400)
+        result = allocate_lines(flat, labels, ocr, fused_lines=fused)
+        assert result.skipped_labels == []
+        assert result.manifest["phantom"] == "iactatus"
+
+    def test_single_word_demand_that_cannot_fit_is_skipped(self):
+        flat, labels, fused, ocr = _one_word_page(phantom_width=69)
+        result = allocate_lines(flat, labels, ocr, fused_lines=fused)
+        assert result.skipped_labels == ["phantom"]
+        assert result.manifest["phantom"] == ""
+
+    # ------------------------------------------------------------------
+    # Precision guards — each must leave the line alone
+    # ------------------------------------------------------------------
+
+    def test_narrow_line_with_real_ocr_is_kept(self):
+        # OCR evidence that the box holds text beats the geometry.
+        labels, fused, ocr = _misdetect_page(phantom_ocr="amen")
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+        )
+        assert result.skipped_labels == []
+
+    def test_full_width_line_with_empty_ocr_is_kept(self):
+        # A real line whose OCR simply failed must not be skipped.
+        labels, fused, ocr = _misdetect_page(phantom_width=_REF_WIDTH)
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+        )
+        assert result.skipped_labels == []
+        assert result.manifest["phantom"] == " ".join(_W1)
+
+    def test_inert_without_fused_lines(self):
+        labels, _, ocr = _misdetect_page()
+        result = allocate_lines(_misdetect_flat(), labels, ocr)
+        assert result.skipped_labels == []
+        assert result.manifest["phantom"] == " ".join(_W1)
+
+    def test_inert_in_global_stub_mode(self):
+        # Every OCR empty (--stub-mode): no reference lines, no page scale,
+        # so no line may be judged a misdetection.
+        labels, fused, ocr = _misdetect_page()
+        ocr = {k: "" for k in ocr}
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+        )
+        assert result.skipped_labels == []
+        assert result.manifest["phantom"] == " ".join(_W1)
+
+    def test_disabled_by_flag(self):
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+            skip_misdetected_lines=False,
+        )
+        assert result.skipped_labels == []
+        assert result.manifest["phantom"] == " ".join(_W1)
+
+    def test_width_ratio_can_be_tightened_to_spare_the_line(self):
+        labels, fused, ocr = _misdetect_page()
+        result = allocate_lines(
+            _misdetect_flat(), labels, ocr, fused_lines=fused,
+            misdetect_width_ratio=0.01,
+        )
+        assert result.skipped_labels == []
+
+    # ------------------------------------------------------------------
+    # Interaction with mid-word syllable carry-over
+    # ------------------------------------------------------------------
+
+    def test_syllable_prefix_survives_a_skip(self):
+        # ref0 ends on a mid-word break; the carried fragment must land on
+        # the next *real* line, not be lost with the skipped box.
+        flat = FlatTextData(
+            words=_W0 + _W1 + _W2,
+            anchors=[Anchor(3, "within_chant_7"),
+                     Anchor(6, "within_chant_7")],
+            chant_spans=[ChantSpan(1, 0, 9)],
+            mid_word_breaks=[MidWordBreak(3, 1, 1)],
+        )
+        labels, fused, ocr = _misdetect_page()
+        with patch(
+            "steps.nw_chant_allocator._split_word_at_syl_boundary",
+            return_value=("confes", "sorum"),
+        ):
+            result = allocate_lines(flat, labels, ocr, fused_lines=fused)
+        assert result.manifest["ref0"].endswith("confes")
+        assert result.manifest["phantom"] == ""
+        assert result.manifest["ref1"].startswith("sorum ")
+
+
+class TestMisdetectedLineSkipPreStart:
+    """The veto also covers the pre-start region (no-volpiano folios)."""
+
+    def _pre_start_page(self, phantom_index=1):
+        """Four lines with the phantom at phantom_index; L* is line 3."""
+        order = ["ref0", "ref1"]
+        order.insert(phantom_index, "phantom")
+        labels = order + ["ref2"]
+        widths = {
+            "ref0": _REF_WIDTH, "ref1": _REF_WIDTH,
+            "ref2": _REF_WIDTH, "phantom": _NARROW,
+        }
+        fused = [
+            _make_fused(lbl, [f"s{i}"], [widths[lbl]])
+            for i, lbl in enumerate(labels)
+        ]
+        ocr = {
+            "ref0": " ".join(_W0),
+            "ref1": " ".join(_W1),
+            "phantom": "",
+            "ref2": " ".join(_W2 + _W3),
+        }
+        return labels, fused, ocr
+
+    def test_skipped_in_continuation_sub_branch(self):
+        # has_continuation: pre-start lines share the carried-over words.
+        flat = _flat_no_volpiano(
+            cont_words=_W0 + _W1, folio_words=_W2 + _W3,
+        )
+        labels, fused, ocr = self._pre_start_page()
+        result = allocate_lines(flat, labels, ocr, fused_lines=fused)
+        assert result.folio_start_line == 3
+        assert result.skipped_labels == ["phantom"]
+        assert result.manifest["phantom"] == ""
+        # Without the veto the phantom takes "seculorum" and ref1 is left
+        # with the remainder.
+        assert result.manifest["ref1"] == " ".join(_W1)
+
+    def test_skipped_in_suffix_alignment_sub_branch(self):
+        # No continuation: pre-start lines are fed from the preceding
+        # folio's last chant via suffix alignment.
+        flat = FlatTextData(
+            words=_W2 + _W3,
+            anchors=[],
+            chant_spans=[ChantSpan(1, 0, 6)],
+            has_continuation=False,
+            suffix_probe_words=_W0 + _W1,
+        )
+        labels, fused, ocr = self._pre_start_page()
+        result = allocate_lines(flat, labels, ocr, fused_lines=fused)
+        assert result.folio_start_line == 3
+        assert result.skipped_labels == ["phantom"]
+        assert result.manifest["phantom"] == ""
+        assert result.manifest["ref1"] == " ".join(_W1)
+
+    def test_vetoed_last_pre_start_line_is_not_force_snapped(self):
+        # The last pre-start line is normally force-snapped to consume every
+        # remaining continuation word.  A vetoed box must escape that.
+        flat = _flat_no_volpiano(
+            cont_words=_W0 + _W1 + ["extraordinarium", "praecedentibus"],
+            folio_words=_W2 + _W3,
+        )
+        labels, fused, ocr = self._pre_start_page(phantom_index=2)
+        result = allocate_lines(flat, labels, ocr, fused_lines=fused)
+        assert result.folio_start_line == 3
+        assert result.skipped_labels == ["phantom"]
+        assert result.manifest["phantom"] == ""

@@ -211,6 +211,52 @@ Assigns a word fragment from `flat_text` to each line label via NW alignment:
   When no anchor is available (e.g. all chants on the folio lack volpiano), remaining
   words are distributed uniformly across remaining lines — `floor(remaining_words /
   remaining_lines)` per line, with the last line receiving any leftover words.
+- **Misdetected-line skipping** (`skip_misdetected_lines=True`, default): BLLA sometimes
+  draws a small box around a non-chant area — a neume group, a clef sliver, an initial.
+  OCR correctly reads nothing there, which sends the box down the stub-mode branch above,
+  where it swallows a whole line's worth of words and shifts every following line. A box is
+  judged a non-text detection, assigned `""` and skipped (leaving the pointer where it was,
+  so its words go to the next line) only when **all four** signals agree:
+  1. allocation wants at least `misdetect_min_words` words from it (default 1 — this only
+     exempts zero-demand no-ops);
+  2. its OCR holds fewer than `misdetect_min_ocr_chars` **alphanumeric** characters
+     (default 2, so punctuation-only output like `'„'` counts as nothing read);
+  3. it is narrower than `misdetect_width_ratio` of the page's typical text-line width
+     (default 0.35);
+  4. its estimated character capacity is below `misdetect_capacity_ratio` of the text
+     being assigned to it (default 0.4) — it cannot physically hold nearly that much.
+
+  Conditions 3 and 4 are measured against page statistics from `_page_line_scale()`:
+  the median width of "reference lines" (fused lines whose OCR has ≥ 8 alphanumeric
+  characters) and the *narrowest* average character width among them, which is the most
+  generous capacity estimate. Fewer than 3 reference lines means no trustworthy page scale
+  and the feature stays inert — which also covers global stub mode, where no line qualifies.
+  Requires `fused_lines`; without it the feature is inert.
+
+  Emits `misdetected_line_skipped` (detail includes the bbox, the width as a percentage of
+  typical, the word/character demand and the estimated capacity) and lists the labels in
+  `AllocationResult.skipped_labels`. Applies in the main allocation loop **and** in both
+  pre-start sub-branches, where a vetoed box is also exempted from the force-snap.
+  Note that a genuinely short line whose OCR merely failed is protected by condition 4: its
+  demand fits its width, so it is never skipped.
+
+  **Threshold calibration.** Measured over 77 fused lines on 6 folios from 3 manuscripts
+  (CH-Fco Ms. 2 002r/002v/006r, NZ-Wt MSR-03 002v, MS234 063v/064r, spanning 795–4872 px
+  page widths), every box the rule actually skipped was ≤ 0.069 of its page's reference
+  width, and the narrowest genuine text line was 0.376 — a `cula seculorum amen` closing
+  line. The `misdetect_width_ratio` default of 0.35 therefore sits inside an empty band.
+  Do not raise it: that closing line is only 7 % above it, and while it is independently
+  protected by conditions 2 and 4 (17 alphanumeric OCR characters, and 25 characters of
+  capacity against an 8.4 threshold), the margin on width alone is thin. Lowering it costs
+  reach on small-format pages, where a non-text box is a larger fraction of a line: NZ-Wt
+  MSR-03's reference width is only 467 px.
+
+  Five of those folios were run unmasked; NZ-Wt MSR-03 002v was run **with** masking and
+  still contained a 21 px non-text box that consumed 6 words — masking is itself a detection
+  step and leaks, so this rule stays on for masked runs too. Re-running CH-Fco Ms. 2 002r
+  with `--mothra-json` does yield 13 fused lines instead of 15, no non-text boxes and zero
+  veto candidates: that is the negative control for these thresholds — on a page with nothing
+  to catch, the rule goes fully inert.
 - Emits `continuation_missing` when the first word of `flat_text` is lowercase and
   `flat_text.has_continuation` is False. The flag detail now also mentions that absent
   volpiano on the preceding folio prevents automatic inference and instructs the user
@@ -367,3 +413,17 @@ pytest tests/ -v
   on the folio lack volpiano (e.g. "3 of 7 chant row(s) on folio '006r' have no
   volpiano"). In stub mode, lines without anchors now receive a uniform share of
   remaining words instead of the previous 1-word-per-line fallback.
+- **Misdetected-line skipping is Cantus-mode only.** OCR-only mode never calls
+  `allocate_lines`: each line is segmented from its own OCR by
+  `_fallback_word_segmentation`, so there is no shared text pointer for a non-text box to
+  corrupt and nothing to veto.
+- **Misdetected-line skipping and column 1.** When a vetoed box is the last line of the
+  left column, the words in the gap fall to the `column_break_777` hard-reset rather than
+  being allocated, since the box is deliberately exempted from the column force-close.
+- **Misdetected-line skipping cannot catch plausibly-sized non-text boxes.** A box wide
+  enough to hold the word it is offered passes condition 4 whatever it actually contains —
+  e.g. a 379px neume group offered `in`, or a 102px margin annotation offered `Ne`. Two
+  further signals would separate these from real lines and are worth evaluating against
+  real folios before being enabled: whether the box's y-centre sits **off the page's
+  regular text-line pitch**, and whether it lies **outside the text block in x**. The
+  latter would also catch marginal folio numbers and other marginalia.

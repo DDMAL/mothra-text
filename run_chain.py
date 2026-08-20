@@ -154,6 +154,8 @@ def _run_one(
             column_count=args.column_count,
             mothra_json_path=mothra_json_path,
             padding=padding,
+            skip_misdetected_lines=not args.no_skip_misdetected_lines,
+            misdetect_width_ratio=args.misdetect_width_ratio,
         )
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)
@@ -229,6 +231,18 @@ def main() -> None:
     parser.add_argument(
         "--column-bimodal-threshold", type=float, default=0.5, metavar="FLOAT",
         help="Coverage-profile valley/peak ratio for gutter detection (default: 0.5).",
+    )
+    parser.add_argument(
+        "--no-skip-misdetected-lines", action="store_true", default=False,
+        help="Allocate Cantus text to every detected line, including boxes far too "
+             "small to hold it whose OCR read nothing (neume groups, clef slivers, "
+             "initials). By default such boxes are flagged and skipped.",
+    )
+    parser.add_argument(
+        "--misdetect-width-ratio", type=float, default=0.35, metavar="FLOAT",
+        help="Maximum box width, as a fraction of the page's typical text-line "
+             "width, for a line to be eligible to be skipped as a misdetection "
+             "(default: 0.35).",
     )
     parser.add_argument("--debug-ocr", action="store_true", default=False,
                         help="Print per-line OCR transcripts and NW alignment detail "
