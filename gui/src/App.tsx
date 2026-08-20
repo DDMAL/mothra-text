@@ -65,6 +65,7 @@ export default function App() {
         <ImageCanvas imageUrl={imageUrl} data={data} layers={layers} />
       ) : (
         <div
+          data-testid="drop-zone"
           className="flex flex-1 items-center justify-center"
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}

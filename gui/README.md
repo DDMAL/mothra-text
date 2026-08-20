@@ -73,6 +73,9 @@ alone. Stub mode is useful for testing segmentation and JSON export without a tr
 ```bash
 cd gui
 npm install
-npm run dev      # dev server at http://localhost:5173
-npm run build    # production build → dist/
+npm run dev        # dev server at http://localhost:5173
+npm run build      # production build → dist/
+npm test           # run the Vitest suite once (CI mode)
+npm run test:watch # run the Vitest suite in watch mode
+npm run lint       # run ESLint
 ```

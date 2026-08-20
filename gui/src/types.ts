@@ -22,6 +22,7 @@ export interface LineEntry {
 
 export interface PipelineData {
   folio: string;
+  mode: "cantus_aligned" | "ocr_only";
   image_width: number;
   image_height: number;
   lines: LineEntry[];

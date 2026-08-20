@@ -169,6 +169,7 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
             return (
               <polygon
                 key={key}
+                data-testid={`line-${key}`}
                 points={points}
                 fill={selected ? "rgba(168,85,247,0.20)" : "rgba(168,85,247,0.10)"}
                 stroke={selected ? "rgb(216,180,254)" : "rgb(168,85,247)"}
@@ -186,7 +187,7 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
           svgState.syllableRects.map(({ key, points, syllable, cx, cy, width, height }) => {
             const fs = Math.max(9, Math.round(height * 0.4));
             return (
-              <g key={key}>
+              <g key={key} data-testid={`syllable-${key}`}>
                 <polygon
                   points={points}
                   fill="rgba(251,146,60,0.10)"
@@ -217,7 +218,7 @@ export function ImageCanvas({ imageUrl, data, layers }: Props) {
             const color = isGt ? "rgb(45,212,191)" : "rgb(251,113,133)";
             const fillColor = isGt ? "rgba(45,212,191,0.10)" : "rgba(251,113,133,0.10)";
             return (
-              <g key={key}>
+              <g key={key} data-testid={`word-${key}`}>
                 <polygon
                   points={points}
                   fill={fillColor}

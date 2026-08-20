@@ -1,0 +1,33 @@
+name: GUI Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gui/**'
+      - '.github/workflows/gui-tests.yml'
+  pull_request:
+    paths:
+      - 'gui/**'
+      - '.github/workflows/gui-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: gui
+      - name: Run tests
+        run: npm test
+        working-directory: gui
+      - name: Lint
+        run: npm run lint
+        working-directory: gui
