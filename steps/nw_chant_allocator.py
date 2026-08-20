@@ -523,6 +523,7 @@ class AllocationResult:
     debug_lines: list[dict] | None = None  # set when debug=True
     folio_start_line: int = 0  # L* index (0 when no pre-start region)
     constituent_overrides: dict[str, str] = field(default_factory=dict)
+    skipped_labels: list[str] = field(default_factory=list)  # misdetections
 
 
 def _chant_starts_in_range(
@@ -537,6 +538,114 @@ def _chant_starts_in_range(
     that chant first appears on.
     """
     return any(start < span.start_word <= end for span in chant_spans)
+
+
+def _usable_ocr_chars(ocr: str) -> int:
+    """Count alphanumeric characters in an OCR string.
+
+    Deliberately not len(): Kraken emits stray punctuation for non-text
+    detections (a neume group often reads as '„' or '.'), and a mark like
+    that is no evidence at all that the box contains text.  Counting only
+    alphanumerics makes punctuation-only output register as "nothing read",
+    which is what the misdetection veto needs to know.
+    """
+    return sum(1 for ch in (ocr or "") if ch.isalnum())
+
+
+def _page_line_scale(
+    fused_lines: list,
+    ocr_texts: dict[str, str],
+    min_ocr_chars: int = 8,
+    min_ref_lines: int = 3,
+) -> "tuple[float | None, float | None]":
+    """Return (reference_width, px_per_char) for a page's text lines.
+
+    Both statistics come from "reference lines" — fused lines whose OCR has
+    at least min_ocr_chars alphanumeric characters, i.e. lines that
+    demonstrably hold text.
+
+    reference_width is their median bbox width: the page's typical text-line
+    width.  px_per_char is the *narrowest* average character width observed
+    across them, which is the most generous (densest-text) estimate, so a
+    box's character capacity is never under-estimated and the veto only ever
+    fires when even the optimistic reading says the text cannot fit.
+
+    Returns (None, None) when fewer than min_ref_lines lines qualify: there
+    is then no trustworthy page scale, and callers must leave misdetection
+    detection switched off.  This also covers global stub mode, where every
+    OCR string is empty and no line qualifies.
+    """
+    import statistics
+
+    reference = []
+    for fused in fused_lines or []:
+        chars = _usable_ocr_chars(ocr_texts.get(fused.label, ""))
+        width = fused.xmax - fused.xmin
+        if chars >= min_ocr_chars and width > 0:
+            reference.append((width, width / chars))
+
+    if len(reference) < min_ref_lines:
+        return None, None
+
+    return (
+        statistics.median(w for w, _ in reference),
+        max(1.0, min(ppc for _, ppc in reference)),
+    )
+
+
+def _misdetected_reason(
+    fused,
+    ocr: str,
+    demand_words: list[str],
+    ref_width: float,
+    px_per_char: float,
+    width_ratio: float,
+    capacity_ratio: float,
+    min_ocr_chars: int,
+    min_words: int,
+) -> "str | None":
+    """Return a flag detail when a fused line is a non-text detection.
+
+    A box is judged a misdetection only when all four independent signals
+    agree, which keeps precision high enough to skip the box outright:
+
+    1. Allocation wants at least min_words words from it (min_words=1 only
+       skips zero-demand no-ops; the capacity test below does the real
+       discriminating).
+    2. OCR read fewer than min_ocr_chars alphanumeric characters — no
+       evidence the box holds any text.
+    3. The box is narrower than width_ratio of the page's typical line.
+    4. Its character capacity is below capacity_ratio of the text being
+       assigned to it — it cannot physically hold nearly that much.
+
+    Returns None (no veto) as soon as any signal disagrees.  In particular a
+    narrow box whose small demand *fits* is left alone: OCR may simply have
+    failed on a genuinely short line.
+    """
+    if len(demand_words) < min_words:
+        return None
+    if _usable_ocr_chars(ocr) >= min_ocr_chars:
+        return None
+
+    width = fused.xmax - fused.xmin
+    if width >= width_ratio * ref_width:
+        return None
+
+    demand_chars = len(" ".join(demand_words))
+    capacity = width / px_per_char
+    if capacity >= capacity_ratio * demand_chars:
+        return None
+
+    return (
+        f"Line {fused.label}: bbox "
+        f"[{fused.xmin},{fused.ymin},{fused.xmax},{fused.ymax}] is "
+        f"{width}px wide ({width / ref_width:.0%} of the page's typical "
+        f"line) and OCR read no text, but allocation wanted "
+        f"{len(demand_words)} word(s) ({demand_chars} chars) starting "
+        f"{demand_words[0]!r} — the box holds ~{capacity:.0f} char(s). "
+        f"Treating as a non-text detection: skipped, words left for the "
+        f"next line."
+    )
 
 
 def locate_first_chant_line(
@@ -642,6 +751,11 @@ def allocate_lines(
     node_ocr: dict | None = None,
     mixed_line_n_words: int = 3,
     mixed_line_min_score: float = 0.0,
+    skip_misdetected_lines: bool = True,
+    misdetect_width_ratio: float = 0.35,
+    misdetect_capacity_ratio: float = 0.4,
+    misdetect_min_ocr_chars: int = 2,
+    misdetect_min_words: int = 1,
 ) -> AllocationResult:
     """Align OCR text for each line against flat_text using NW alignment.
 
@@ -727,6 +841,33 @@ def allocate_lines(
         mixed_line_min_score: NW quality gate for mixed-line detection.
                             Detection is skipped when the best score
                             falls below this threshold (default 0.0).
+        skip_misdetected_lines: When True (default), a line that is far
+                            too small to hold the text being assigned to
+                            it, and whose OCR read no text at all, is
+                            treated as a non-text detection (a neume
+                            group, a clef sliver, an initial): it is
+                            assigned "", recorded in
+                            AllocationResult.skipped_labels, flagged as
+                            misdetected_line_skipped, and the pointer is
+                            left where it was so the words go to the next
+                            line instead.  Requires fused_lines for the
+                            geometry; without it the feature is inert.
+                            See _misdetected_reason() for the four
+                            conditions and _page_line_scale() for the
+                            page statistics they are measured against.
+        misdetect_width_ratio: Maximum box width, as a fraction of the
+                            page's typical text-line width, for a line to
+                            be veto-eligible (default 0.35).
+        misdetect_capacity_ratio: Maximum estimated character capacity of
+                            the box, as a fraction of the characters
+                            being assigned to it, for the veto to fire
+                            (default 0.4).
+        misdetect_min_ocr_chars: A line is veto-eligible only when its
+                            OCR holds fewer than this many alphanumeric
+                            characters (default 2).
+        misdetect_min_words: Minimum words the allocation must want
+                            before the veto is considered (default 1,
+                            i.e. only zero-demand no-ops are exempt).
 
     Returns:
         AllocationResult with manifest, validation flags, and
@@ -757,6 +898,57 @@ def allocate_lines(
     }
     # Right-side syllable fragment of a split word, carried to the next line.
     syllable_prefix: str | None = None
+
+    # Misdetected-line veto: page-level geometry statistics, computed once.
+    # _ref_width is None whenever the page cannot supply a trustworthy scale
+    # (too few OCR-bearing lines, no fused_lines, or the feature disabled),
+    # and every veto check below is gated on it being non-None.
+    fused_by_label: dict = (
+        {f.label: f for f in fused_lines} if fused_lines else {}
+    )
+    _ref_width: float | None = None
+    _px_per_char: float | None = None
+    if skip_misdetected_lines and fused_lines:
+        _ref_width, _px_per_char = _page_line_scale(fused_lines, ocr_texts)
+    skipped_labels: list[str] = []
+
+    def _veto(label: str, demand_words: list[str]) -> "str | None":
+        """Return a misdetection reason for label, or None to keep it."""
+        if _ref_width is None or label not in fused_by_label:
+            return None
+        return _misdetected_reason(
+            fused_by_label[label],
+            ocr_texts.get(label) or "",
+            demand_words,
+            _ref_width,
+            _px_per_char,
+            misdetect_width_ratio,
+            misdetect_capacity_ratio,
+            misdetect_min_ocr_chars,
+            misdetect_min_words,
+        )
+
+    def _record_skip(label: str, reason: str, ocr: str, pointer: int) -> None:
+        """Assign no text to a vetoed line and record it for the caller."""
+        manifest[label] = ""
+        skipped_labels.append(label)
+        flags.append(ValidationFlag("misdetected_line_skipped", reason))
+        if debug and debug_lines_out is not None:
+            debug_lines_out.append({
+                "label": label,
+                "ocr": ocr,
+                "pointer_start": pointer,
+                "pointer_end": pointer,
+                "consumed": 0,
+                "assigned": "",
+                "best_k_pre_snap": 0,
+                "best_norm": None,
+                "anchor_word": None,
+                "anchor_type": None,
+                "snapped": False,
+                "forced": False,
+                "alignment": "(skipped: misdetected non-text line)",
+            })
 
     # Pre-compute column-1 word ceiling for two-column folios.
     col_break_word: int | None = None
@@ -1080,6 +1272,19 @@ def allocate_lines(
                     consumed = _pbest_k
                     _pre_best_norm = _pbest_norm
 
+                # Misdetected-line veto, before the force-snap below so a
+                # non-text box is never force-closed onto the continuation
+                # tail.  text_pointer is left where it was.
+                _reason = _veto(
+                    label,
+                    flat_text.words[
+                        text_pointer: text_pointer + max(consumed, 0)
+                    ],
+                )
+                if _reason is not None:
+                    _record_skip(label, _reason, ocr, text_pointer)
+                    continue
+
                 # Force-snap: last pre-start line consumes all remaining
                 # continuation words (mirrors the col_break_word force-close).
                 if label_idx == folio_start_line - 1:
@@ -1138,6 +1343,19 @@ def allocate_lines(
                             _pbest_k = _pk
                     _suf_consumed = _pbest_k
                     _pre_best_norm = _pbest_norm
+
+                # Misdetected-line veto, before the force-snap below.
+                # _suffix_ptr is left where it was, so the suffix words go
+                # to the next pre-start line instead.
+                _reason = _veto(
+                    label,
+                    _suffix_words[
+                        _suffix_ptr: _suffix_ptr + max(_suf_consumed, 0)
+                    ],
+                )
+                if _reason is not None:
+                    _record_skip(label, _reason, ocr, _suffix_ptr)
+                    continue
 
                 if _is_forced:
                     _suf_consumed = len(_suf_cands)
@@ -1320,6 +1538,19 @@ def allocate_lines(
                     _dbg_alignment = "(alignment unavailable)"
 
         consumed = max(consumed, 0)
+
+        # Misdetected-line veto.  Evaluated on the final NW/stub demand but
+        # before the col-1 clamp and force-close, so a non-text box is never
+        # forced to close the column.  `continue` leaves text_pointer *and*
+        # syllable_prefix untouched: the words — and any carried mid-word
+        # fragment — go to the next line instead.
+        _reason = _veto(
+            label, flat_text.words[text_pointer: text_pointer + consumed]
+        )
+        if _reason is not None:
+            _record_skip(label, _reason, ocr, text_pointer)
+            continue
+
         if col1:
             consumed = min(consumed, max(0, col_break_word - text_pointer))
 
@@ -1401,6 +1632,7 @@ def allocate_lines(
         debug_lines=debug_lines_out,
         folio_start_line=folio_start_line,
         constituent_overrides=constituent_overrides,
+        skipped_labels=skipped_labels,
     )
 
 

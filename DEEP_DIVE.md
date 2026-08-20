@@ -184,8 +184,8 @@ In **Cantus-aligned mode**, this is the most complex stage. See Section 5 for a 
 1. `build_flat_text_and_anchors()` flattens all chant CSV rows for the folio into a single ordered word list, extracting volpiano break positions as `Anchor` objects.
 2. `fuse_colinear_segments()` produces fused OCR texts (concatenated constituent texts).
 3. **Pre-NW music-region filter** (optional, library callers only — not exposed as a CLI flag): when `music_boxes` (YOLO-detected stave/neume bounding boxes, absolute pixel `[x0, y0, x1, y1]` coordinates) is passed to `run()`, any fused line whose bbox overlaps a music region by more than `music_overlap_threshold` (default 0.30, strict `>`) of the line's own area is dropped from `sorted_labels` before NW alignment runs. This prevents spurious BLLA baselines near music staves from consuming ground-truth word slots and shifting every subsequent line off by one. Dropped nodes are recorded on `collection._music_filter_dropped`. Only `text-service/main.py` (the mothra API layer) passes `music_boxes`; CLI runs and `run_chain.py` pass `music_boxes=None` and are unaffected.
-4. `allocate_lines()` maps each fused line label to a word span using Needleman-Wunsch alignment.
-5. `_defuse_manifest()` distributes words back to constituent node labels proportionally by pixel width.
+4. `allocate_lines()` maps each fused line label to a word span using Needleman-Wunsch alignment. Fused lines far too small to hold the text they are offered, whose OCR read nothing, are flagged `misdetected_line_skipped` and assigned no text so they cannot consume a line's words (see 5b). Unlike the music-region filter in step 3 this needs no external annotation — it works from the page's own line geometry — so it also protects CLI and `run_chain.py` runs.
+5. `_defuse_manifest()` distributes words back to constituent node labels proportionally by pixel width. This is also why the veto in step 4 operates at the fused level: a tiny segment that y-overlaps a real line is *fused into* it and receives ~0 words from the proportional split, so only a tiny box that forms its own fused line can do damage.
 
 **Output:** `manifest: dict[str, str]` — original node label → Cantus word fragment.
 
@@ -378,6 +378,10 @@ For each fused line label in reading order:
 
 **Stub mode (empty OCR):** each line advances to the next anchor of any type. When no anchors are available, remaining words are distributed uniformly across remaining lines.
 
+6. **Misdetected-line veto (`skip_misdetected_lines`, default on):** evaluated on the final NW/stub demand, before the col-1 clamp and force-close. Stub mode above is designed for the whole-page case (`--stub-mode`); when a *single* line is empty on a page of good OCR it is the wrong behaviour, because that line is usually not a line at all — BLLA drew a box around a neume group, a clef sliver, or an initial. The veto fires only when all four of these agree: allocation wants ≥ `misdetect_min_words` words (default 1); OCR holds < `misdetect_min_ocr_chars` **alphanumeric** characters (default 2, so `'„'` counts as nothing); the box is narrower than `misdetect_width_ratio` of the page's typical line (default 0.35); and its character capacity is below `misdetect_capacity_ratio` of the text being assigned (default 0.4). The line is then assigned `""`, recorded in `skipped_labels`, flagged `misdetected_line_skipped`, and `continue`d — leaving `text_pointer` *and* `syllable_prefix` untouched so the words, and any carried mid-word fragment, go to the next line. Page statistics come from `_page_line_scale()`: the median width of lines whose OCR has ≥ 8 alphanumeric characters, and the *narrowest* average character width among them (the most generous capacity estimate). Fewer than 3 such lines → no page scale → feature inert, which also covers global stub mode. The veto runs in this main loop and in both pre-start sub-branches, where a vetoed box is additionally exempt from the force-snap.
+
+Conditions 3 and 4 are both required because either alone misfires: width alone would veto a genuine short closing line whose OCR failed, and demand alone would veto a real short line that stub mode over-fed. Conversely `misdetect_min_words` is 1, not 2 — a word *count* cannot distinguish a 379px box that can legitimately hold `in` from a 69px box that cannot hold `iactatus`; only the capacity test can, so gating on word count would wrongly spare the latter.
+
 **Two-column handling:** at `label_idx == left_column_count`, the text pointer is hard-reset to the `column_break_777` anchor word index. The last col-1 line is force-closed at that anchor too, so no words fall through the gap.
 
 **Mid-word breaks:** when `text_pointer + consumed` lands on a `MidWordBreak`, the last word of the current line is split at the volpiano syllable boundary using `_split_word_at_syl_boundary()`. The right fragment is stored in `syllable_prefix` and prepended to the next line's word list.
@@ -386,7 +390,7 @@ For each fused line label in reading order:
 
 **Mixed-line detection:** for the last pre-start line (index L*-1), the code checks whether the rightmost constituent(s) of that fused line contain any opening words of this folio's first chant. If so, it constructs per-constituent `constituent_overrides` that correctly split the line between "previous folio continuation" and "this folio start".
 
-**Output:** `AllocationResult(manifest, flags, text_pointer_end, debug_lines, folio_start_line, constituent_overrides)`
+**Output:** `AllocationResult(manifest, flags, text_pointer_end, debug_lines, folio_start_line, constituent_overrides, skipped_labels)`
 
 ### 5c. `_defuse_manifest()`
 

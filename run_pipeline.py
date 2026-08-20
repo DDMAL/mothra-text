@@ -235,6 +235,8 @@ def run(
     padding: int = 15,
     music_boxes: list[list[float]] | None = None,
     music_overlap_threshold: float = 0.30,
+    skip_misdetected_lines: bool = True,
+    misdetect_width_ratio: float = 0.35,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
@@ -303,6 +305,18 @@ def run(
         music_overlap_threshold: Minimum overlap ratio (intersection /
             line area) for a line to be considered overlapping a music
             box (default 0.30).
+        skip_misdetected_lines: When True (default), a fused line far too
+            small to hold the text the allocator wants to give it, whose
+            OCR read no text at all, is treated as a non-text detection
+            (a neume group, a clef sliver, an initial): it is assigned no
+            text and the words go to the next line instead.  Unlike the
+            ``music_boxes`` filter above this needs no external
+            annotation — it works from the page's own line geometry — so
+            it also protects CLI and ``run_chain.py`` runs.  See
+            ``allocate_lines`` for the rule.
+        misdetect_width_ratio: Maximum box width, as a fraction of the
+            page's typical text-line width, for a line to be eligible
+            for that skip (default 0.35).
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level
@@ -470,6 +484,8 @@ def run(
                 debug=debug_ocr,
                 fused_lines=fused_lines,
                 node_ocr=node_ocr,
+                skip_misdetected_lines=skip_misdetected_lines,
+                misdetect_width_ratio=misdetect_width_ratio,
             )
 
             # --- DEBUG OCR: print per-line NW alignment detail ---
@@ -516,6 +532,17 @@ def run(
             for flag in alloc_result.flags:
                 logger.warning(
                     "Validation flag [%s]: %s", flag.flag_type, flag.detail
+                )
+            if alloc_result.skipped_labels:
+                _skipped = set(alloc_result.skipped_labels)
+                logger.warning(
+                    "  Skipped %d misdetected (non-text) line(s): %s",
+                    len(alloc_result.skipped_labels),
+                    "; ".join(
+                        f"{f.label} [{f.xmin},{f.ymin},{f.xmax},{f.ymax}] "
+                        f"= {'+'.join(f.constituent_labels)}"
+                        for f in fused_lines if f.label in _skipped
+                    ),
                 )
             logger.info(
                 "  Manifest: %d / %d node labels assigned text",
@@ -744,6 +771,21 @@ def main() -> None:
              "Lower values require a deeper valley (default: 0.5).",
     )
     parser.add_argument(
+        "--no-skip-misdetected-lines", action="store_true", default=False,
+        help="Allocate Cantus text to every detected line, including boxes "
+             "far too small to hold it whose OCR read nothing (neume "
+             "groups, clef slivers, initials). By default such boxes are "
+             "flagged and skipped so they cannot consume a line's words.",
+    )
+    parser.add_argument(
+        "--misdetect-width-ratio",
+        type=float, default=0.35, metavar="FLOAT",
+        help="Maximum box width, as a fraction of the page's typical "
+             "text-line width, for a line to be eligible to be skipped as "
+             "a misdetection (default: 0.35). Lower values skip fewer "
+             "boxes.",
+    )
+    parser.add_argument(
         "--prev-folio-state", metavar="PATH", default=None,
         help="JSON sidecar from the previous folio run. Provides post-77 "
              "continuation words for chants that span two folios.",
@@ -879,6 +921,8 @@ def main() -> None:
         ocr_only_mode=ocr_only_mode,
         mothra_json_path=mothra_json_for_run,
         padding=args.padding,
+        skip_misdetected_lines=not args.no_skip_misdetected_lines,
+        misdetect_width_ratio=args.misdetect_width_ratio,
     )
     _summarise(collection)
 

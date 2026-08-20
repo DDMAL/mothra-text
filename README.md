@@ -59,6 +59,8 @@ python run_pipeline.py \
 | `--export-json PATH` | Write output JSON for the Pipeline Inspector GUI |
 | `--mei-json PATH` | Write MEI Text Alignment JSON to an explicit path (overrides `--output-dir`) |
 | `--output-dir PATH` | Directory for auto-named MEI JSON output. Requires `--source-id`/`--csv` and `--folio`. Output is named `{RISM-code}_{shelfmark}_{folio}.json` (e.g. `CH-E_611_001r.json`). The `"folio"` field inside the JSON also uses this regularized name. |
+| `--no-skip-misdetected-lines` | Allocate Cantus text to every detected line, including boxes far too small to hold it whose OCR read nothing. By default such boxes are flagged and skipped (see 1d) |
+| `--misdetect-width-ratio FLOAT` | Maximum box width, as a fraction of the page's typical text-line width, for a line to be eligible to be skipped as a misdetection (default 0.35) |
 | `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail; in OCR-only mode also prints a startup banner and lists any ignored flags |
 
 **OCR-only mode:** When neither `--csv` nor `--source-id` is given, the pipeline skips
@@ -132,6 +134,8 @@ python run_chain.py \
 | `--mothra-jsons-dir PATH` | Directory containing mothra annotation JSONs named `{image_stem}.json`, one per folio (produced by `scripts/run_mothra_inference.py --out-dir`). Masks each folio's image before segmentation; a missing per-folio JSON logs a warning and runs that folio unmasked. |
 | `--padding PX` | Pixels added around each text bbox before masking (default 15). Only used when `--mothra-jsons-dir` is given. |
 | `--skip-masking` | Skip text-region masking even if `--mothra-jsons-dir` is given. |
+| `--no-skip-misdetected-lines` | Allocate Cantus text to every detected line, including boxes far too small to hold it whose OCR read nothing (see 1d). |
+| `--misdetect-width-ratio FLOAT` | Maximum box width, as a fraction of the page's typical text-line width, for a line to be eligible to be skipped as a misdetection (default 0.35). |
 
 All model and device flags from `run_pipeline.py` (`--segmentation-model`,
 `--recognition-model`, `--device`, `--stub-mode`, `--column-count`,
@@ -225,6 +229,58 @@ call — `mothra-text` is included there as a git submodule. See
 [DEEP_DIVE.md §9a](DEEP_DIVE.md#9a-relationship-to-the-mothra-repo-landing-page--text-service)
 for a summary of that integration, and [DDMAL/mothra#151](https://github.com/DDMAL/mothra/issues/151)
 for the full architecture write-up.
+
+---
+
+### 1d. Misdetected line skipping
+
+BLLA sometimes draws a small box around a non-chant area — a neume group, a clef sliver, an
+initial. The OCR model correctly reads nothing there, but the NW allocator cannot tell "no
+text because this isn't text" from "no text because OCR failed", so it hands the box a whole
+line's worth of Cantus words and every following line shifts.
+
+`allocate_lines` now flags and skips such a box: it is assigned no text and the pointer stays
+put, so its words go to the next box in the existing reading order. A box is only skipped when
+all four signals agree — OCR read essentially nothing, the box is far narrower than the page's
+typical text line, it cannot physically hold nearly as many characters as it is being offered,
+and at least one word was actually being offered. See
+[`steps/README.md`](steps/README.md#allocate_linesflat_text-sorted_labels-ocr_texts-column_count1-)
+for the thresholds and the page statistics they are measured against.
+
+Each skip is logged twice: once as a `misdetected_line_skipped` validation flag with the full
+reasoning, and once as a summary line naming every skipped box and its bbox:
+
+```
+WARNING  Validation flag [misdetected_line_skipped]: Line fused_10: bbox [1019,1966,1079,2073]
+         is 60px wide (4% of the page's typical line) and OCR read no text, but allocation
+         wanted 6 word(s) (48 chars) starting 'seculorum' — the box holds ~2 char(s).
+         Treating as a non-text detection: skipped, words left for the next line.
+WARNING    Skipped 1 misdetected (non-text) line(s): fused_10 [1019,1966,1079,2073] = 002v_region10
+```
+
+The skipped box is **kept** in the output — it still appears in `--export-json` and the GUI,
+just with no words — so a skip can be checked by eye. Empty syllables are already filtered out
+of the MEI JSON, so that output is unaffected.
+
+Unlike the music-region filter in 1c this needs no external annotation: it works from the
+page's own line geometry, so it protects CLI and `run_chain.py` runs too. The two are
+complementary rather than alternatives — when YOLO music boxes *are* available, 1c removes
+part of this class of box earlier and on stronger evidence, but it is scoped to music regions
+and cannot see a folio number or a marginal mark. Pass `--no-skip-misdetected-lines` to
+disable, or lower `--misdetect-width-ratio` to skip fewer boxes.
+
+**Masking reduces these boxes but does not eliminate them, so this rule applies to masked
+runs too.** Text-region masking (1b) attacks the problem at the source — BLLA never sees the
+non-text pixels, so it cannot draw a box there — and where it works it is the better fix. On
+CH-Fco Ms. 2 002r an unmasked run produces 15 fused lines including two non-text boxes (a
+pencil folio number and a single neume) that this rule skips, while the same folio with
+`--mothra-json` produces 13 fused lines, no non-text boxes at all, and leaves this rule fully
+inert. But masking is itself a detection step and leaks: the NZ-Wt MSR-03 002v example was
+produced *with* masking and still contained a 21 px non-text box that consumed 6 words and
+shifted the rest of the page. Keep this rule on for masked and unmasked runs alike.
+
+Not applicable in OCR-only mode: without Cantus text there is no shared text pointer for a
+non-text box to corrupt.
 
 ---
 
