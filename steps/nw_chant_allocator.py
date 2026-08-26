@@ -72,6 +72,17 @@ def _folio_sort_key(folio: str) -> tuple[int, int]:
     return (0, 0)
 
 
+def _folio_linear_index(key: tuple[int, int]) -> int:
+    """Linear physical-page position for a (num, side) key from _folio_sort_key.
+
+    side 0 = recto, 1 = verso, so consecutive physical pages (002v, 003r,
+    003v, ...) get consecutive integers regardless of which of them have
+    CSV rows. Used to count how many folio-sides separate two folios,
+    including ones with no CSV row of their own (mothra-text#55).
+    """
+    return key[0] * 2 + key[1]
+
+
 def _classify_break(break_str: str) -> str:
     n = len(break_str)
     if n == 1:
@@ -137,17 +148,21 @@ def _split_word_at_syl_boundary(
     return left, right
 
 
-def _parse_row_words_and_anchors(
+def _parse_row_structure(
     raw_text: str, volpiano: str,
 ) -> tuple[
     list[str],
     list[tuple[int, str]],
-    list[str],
     list[tuple[int, int, int]],
+    list[int],
 ]:
     """Parse one chant row's text+volpiano into words, anchors, and breaks.
 
-    Also identifies post-77 continuation words for the next folio.
+    Shared core for _parse_row_words_and_anchors() (this-folio vs. the
+    immediate-next-folio's continuation) and _carry_words_for_gap()
+    (continuation for a folio further away, past one or more CSV-row-less
+    folios) — both need the same word/anchor parsing, but split the result
+    at a different point.
 
     Args:
         raw_text: this row's fulltext_ms/fulltext_standardized, NOT yet
@@ -156,17 +171,19 @@ def _parse_row_words_and_anchors(
         volpiano: this row's volpiano field.
 
     Returns:
-        (this_folio_words, raw_anchors,
-         continuation_words, raw_mid_word_breaks)
+        (words, raw_anchors, raw_mid_word_breaks, break_positions)
 
-        - this_folio_words: words on this folio (up to first 77, if any)
+        - words: every word on this row's fulltext, uncut by any break
         - raw_anchors: [(word_offset, anchor_type), ...] where
           word_offset is the cumulative count AFTER the break
-        - continuation_words: words after the first 77 break (belong
-          to the next folio; no separate CSV row for these)
         - raw_mid_word_breaks: [(anchor_word_index, syl_left, syl_right), ...]
           for each within_chant_7 break that falls mid-word; syl_left and
           syl_right are the syllable counts on each side of the break
+        - break_positions: word-space index of every page_break_77 anchor,
+          in order. A row normally has zero or one — but when a CSV-row-less
+          folio's text is embedded inside a neighbour's row (mothra-text#55),
+          a second 77 marks where that row-less folio's own text ends and
+          the folio after it begins.
 
     Note on Cantus '|' phrase separators: clean_text() strips '|' entirely,
     but the volpiano field's own word-group structure still allocates a
@@ -205,7 +222,7 @@ def _parse_row_words_and_anchors(
     word_idx = 0
     raw_anchors: list[tuple[int, str]] = []
     raw_mid_word_breaks: list[tuple[int, int, int]] = []
-    continuation_start: int | None = None
+    break_positions: list[int] = []
     seg_count = 0  # number of volpiano segments processed so far
     prev_seg = ""  # previous iteration's segment (used for syl_left)
 
@@ -255,8 +272,29 @@ def _parse_row_words_and_anchors(
             anchor_type = _classify_break(break_str)
             raw_anchors.append((word_idx, anchor_type))
 
-            if anchor_type == "page_break_77" and continuation_start is None:
-                continuation_start = word_idx
+            if anchor_type == "page_break_77":
+                break_positions.append(word_idx)
+
+    # Collapse redundant trailing page_break_77(s) that have no
+    # volpiano-encoded word-group after them back into the segment before
+    # them. Some rows end "...<word>77---4" as a closing convention
+    # (frequently on a doxology, whose routine cadence is often not
+    # re-notated) rather than a "more content follows on another folio"
+    # marker — word_idx never advances past such a break, so it equals the
+    # final word_idx the loop reaches. Treating it as its own folio boundary
+    # would peel off the raw text's un-notated trailing words (e.g. "et in
+    # secula seculorum amen") as if they belonged to a folio further away,
+    # when they are actually still part of the folio the nearest real break
+    # already accounts for (mothra-text#55). Only trailing *extra* breaks
+    # are dropped this way — len > 1 guards the sole-break case, where a
+    # dangling break is the only marker of a real page turn at all (its
+    # un-notated tail must still count as that folio's continuation, not be
+    # reabsorbed into "this folio's own words"). A break with genuine
+    # melodic content after it (more word-groups before the next break or
+    # the volpiano's end) is unaffected — its word_idx is strictly less
+    # than the final one.
+    while len(break_positions) > 1 and break_positions[-1] >= word_idx:
+        break_positions.pop()
 
     # Correct every index from volpiano-native (pipe-inclusive) position
     # space into real (post-clean_text) word-space before using any of
@@ -265,8 +303,49 @@ def _parse_row_words_and_anchors(
     raw_mid_word_breaks = [
         (_to_real_index(wi), sl, sr) for (wi, sl, sr) in raw_mid_word_breaks
     ]
-    if continuation_start is not None:
-        continuation_start = _to_real_index(continuation_start)
+    break_positions = [_to_real_index(wi) for wi in break_positions]
+
+    return words, raw_anchors, raw_mid_word_breaks, break_positions
+
+
+def _parse_row_words_and_anchors(
+    raw_text: str, volpiano: str,
+) -> tuple[
+    list[str],
+    list[tuple[int, str]],
+    list[str],
+    list[tuple[int, int, int]],
+]:
+    """Parse one chant row's text+volpiano into words, anchors, and breaks.
+
+    Also identifies post-77 continuation words for the next folio.
+
+    Args:
+        raw_text: this row's fulltext_ms/fulltext_standardized, NOT yet
+            passed through clean_text() — this function cleans it
+            internally (see _parse_row_structure's pipe-offset note).
+        volpiano: this row's volpiano field.
+
+    Returns:
+        (this_folio_words, raw_anchors,
+         continuation_words, raw_mid_word_breaks)
+
+        - this_folio_words: words on this folio (up to first 77, if any)
+        - raw_anchors: [(word_offset, anchor_type), ...] where
+          word_offset is the cumulative count AFTER the break
+        - continuation_words: words after the first 77 break (belong
+          to the next folio; no separate CSV row for these). When the row
+          has more than one 77, this is everything after the first —
+          i.e. it may include text for a folio beyond the immediate next
+          one too; see _carry_words_for_gap() for splitting that further.
+        - raw_mid_word_breaks: [(anchor_word_index, syl_left, syl_right), ...]
+          for each within_chant_7 break that falls mid-word; syl_left and
+          syl_right are the syllable counts on each side of the break
+    """
+    words, raw_anchors, raw_mid_word_breaks, break_positions = (
+        _parse_row_structure(raw_text, volpiano)
+    )
+    continuation_start = break_positions[0] if break_positions else None
 
     # Determine which words stay on this folio vs continue to next.
     if continuation_start is not None:
@@ -289,6 +368,41 @@ def _parse_row_words_and_anchors(
     return (
         this_folio_words, raw_anchors, continuation_words, raw_mid_word_breaks
     )
+
+
+def _carry_words_for_gap(raw_text: str, volpiano: str, skip: int) -> list[str]:
+    """Return the words this row contributes `skip` physical folios past its own.
+
+    A row's text normally spans at most two folios: its own (up to the
+    first page_break_77) and the immediate next one (everything after it).
+    But when a folio between two CSV rows has no row of its own — no chant
+    starts there (mothra-text#42) — its text is embedded inside the
+    preceding row too, marked off by a *second* page_break_77. This lets
+    the infer_continuation CSV-scan (mothra-text#55) hand each folio only
+    the segment that is actually its own, instead of the whole remainder.
+
+    Args:
+        raw_text:  the carrying row's fulltext_ms/fulltext_standardized.
+        volpiano:  the carrying row's volpiano field.
+        skip:      how many CSV-row-less folios sit between the carrying
+                   row's own folio and the target folio. skip=0 is the
+                   immediate next folio (same words as
+                   _parse_row_words_and_anchors(...)'s continuation_words,
+                   when the row has exactly one page_break_77). skip=1 is
+                   the folio after that, and so on.
+
+    Returns:
+        The words belonging to the target folio, or [] when the row does
+        not have enough page_break_77 markers to reach `skip` folios past
+        its own — the row-less folio(s) in between absorbed everything (or
+        there genuinely is no continuation that far).
+    """
+    words, _, _, break_positions = _parse_row_structure(raw_text, volpiano)
+    boundaries = [0, *break_positions, len(words)]
+    idx = skip + 1
+    if idx >= len(boundaries) - 1:
+        return []
+    return words[boundaries[idx]:boundaries[idx + 1]]
 
 
 # ---------------------------------------------------------------------------
@@ -317,10 +431,15 @@ def build_flat_text_and_anchors(
         infer_continuation: When True (default) and prev_folio_state is
                             None (no chain information at all - e.g. a
                             standalone single-folio run), scan csv_rows
-                            for the immediately preceding folio (by CSV
-                            ordering) with a 77 break and prepend its
-                            post-77 words. Handles the common case where
-                            the previous folio was not run first.
+                            for the nearest preceding folio (by CSV
+                            ordering) with a 77 break and prepend the
+                            words belonging to this folio's physical
+                            position — accounting for any CSV-row-less
+                            folios in between by counting how many 77
+                            breaks the row's own volpiano needs to skip
+                            (mothra-text#55; see _carry_words_for_gap()).
+                            Handles the common case where the previous
+                            folio was not run first.
 
     Returns:
         FlatTextData with words, anchors, chant_spans, initial_pointer,
@@ -385,9 +504,22 @@ def build_flat_text_and_anchors(
                 or carry_row.get("fulltext_standardized")
                 or ""
             ).strip()
-            _, _, carry_words, _ = _parse_row_words_and_anchors(
+            # How many folio-sides separate the carrying row's folio from
+            # the target — 0 when it's the true immediate predecessor
+            # (the only case this scan used to support), >0 when one or
+            # more CSV-row-less folios sit in between (mothra-text#55).
+            # skip selects which of the row's page_break_77-delimited
+            # segments belongs to the target, instead of always handing
+            # over everything after the first break.
+            skip = (
+                _folio_linear_index(target_key)
+                - _folio_linear_index(prev_folio_key)
+                - 1
+            )
+            carry_words = _carry_words_for_gap(
                 raw_carry,
                 (carry_row.get("volpiano") or "").strip(),
+                skip,
             )
             if carry_words:
                 words.extend(carry_words)

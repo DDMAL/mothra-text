@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 from steps.nw_chant_allocator import (
     ChantSpan,
     build_flat_text_and_anchors,
+    _carry_words_for_gap,
+    _parse_row_words_and_anchors,
 )
 
 
@@ -214,6 +216,113 @@ class TestInferContinuation:
         assert result.has_continuation is False
         assert result.words == ["epsilon"]
 
+    def test_infer_continuation_suppressed_when_rowless_folio_absorbs_all(self):
+        # mothra-text#55 (CH-Fco 003v shape): 002v has a single 77, so its
+        # post-77 words belong entirely to phantom 003r (no CSV row of its
+        # own, e.g. no chant starts there). 003v starts a fresh chant and
+        # must get no continuation at all, even though 002v is the nearest
+        # folio actually present in the CSV.
+        rows = [
+            _row("002v", "1", "alpha beta gamma delta",
+                 volpiano="a---b7---c77---d"),
+            _row("003v", "1", "epsilon"),
+        ]
+        result = build_flat_text_and_anchors(rows, "003v")
+        assert result.has_continuation is False
+        assert result.words == ["epsilon"]
+
+    def test_infer_continuation_uses_second_break_past_rowless_folio(self):
+        # mothra-text#55 (Salzinnes 123v shape): 002v's row has TWO 77
+        # breaks. The first segment belongs to phantom 003r (no CSV row);
+        # the second segment is 003v's real continuation. 003v must get
+        # only the second segment, not the whole post-first-77 blob.
+        rows = [
+            _row("002v", "1", "alpha beta gamma delta epsilon zeta",
+                 volpiano="a---b77---c---d77---e---f"),
+            _row("003v", "1", "eta"),
+        ]
+        result = build_flat_text_and_anchors(rows, "003v")
+        assert result.has_continuation is True
+        assert result.words[:2] == ["epsilon", "zeta"]
+        assert result.words == ["epsilon", "zeta", "eta"]
+
+    def test_infer_continuation_ignores_dangling_trailing_break(self):
+        # mothra-text#55 regression found against real CH-Fco Ms. 2 data:
+        # a row can have a second 77 with NO volpiano-encoded word-group
+        # after it (e.g. a doxology's un-notated cadence, "...semper77---4"
+        # closing the row) even though the raw fulltext has a few more
+        # words past it. That second 77 does not mark a real folio
+        # boundary with content of its own — it must be treated as part of
+        # the segment before it (phantom 003r's text here), not sliced off
+        # as belonging to the folio two hops away (003v).
+        rows = [
+            _row("002v", "1", "alpha beta gamma delta epsilon zeta",
+                 volpiano="a---b77---c---d77---4"),
+            _row("003v", "1", "eta"),
+        ]
+        result = build_flat_text_and_anchors(rows, "003v")
+        assert result.has_continuation is False
+        assert result.words == ["eta"]
+
+
+class TestCarryWordsForGap:
+    """Direct tests for the mothra-text#55 gap-aware continuation helper."""
+
+    def test_skip_zero_matches_continuation_words_single_break(self):
+        raw_text = "alpha beta gamma delta"
+        volpiano = "a---b7---c77---d"
+        _, _, continuation_words, _ = _parse_row_words_and_anchors(
+            raw_text, volpiano
+        )
+        assert _carry_words_for_gap(raw_text, volpiano, skip=0) == (
+            continuation_words
+        )
+
+    def test_skip_one_on_single_break_row_is_empty(self):
+        # Only one 77 in the row — nothing left for a folio two hops away.
+        raw_text = "alpha beta gamma delta"
+        volpiano = "a---b7---c77---d"
+        assert _carry_words_for_gap(raw_text, volpiano, skip=1) == []
+
+    def test_skip_one_on_two_break_row_returns_second_segment(self):
+        raw_text = "alpha beta gamma delta epsilon zeta"
+        volpiano = "a---b77---c---d77---e---f"
+        assert _carry_words_for_gap(raw_text, volpiano, skip=0) == (
+            ["gamma", "delta"]
+        )
+        assert _carry_words_for_gap(raw_text, volpiano, skip=1) == (
+            ["epsilon", "zeta"]
+        )
+        assert _carry_words_for_gap(raw_text, volpiano, skip=2) == []
+
+    def test_dangling_trailing_break_collapses_into_prior_segment(self):
+        # Two 77s, but the second has no word-group after it in the
+        # volpiano (raw fulltext has trailing words the volpiano never
+        # bothered to notate — e.g. a doxology's routine cadence). It must
+        # not be treated as its own folio boundary: those trailing words
+        # stay merged into the segment the first (real) break opened.
+        raw_text = "alpha beta gamma delta epsilon zeta"
+        volpiano = "a---b77---c---d77---4"
+        assert _carry_words_for_gap(raw_text, volpiano, skip=0) == (
+            ["gamma", "delta", "epsilon", "zeta"]
+        )
+        assert _carry_words_for_gap(raw_text, volpiano, skip=1) == []
+
+    def test_sole_dangling_break_still_carries_its_tail(self):
+        # A single 77 with nothing volpiano-encoded after it is still the
+        # only marker of a real page turn — its un-notated tail must
+        # remain that folio's continuation, not be reabsorbed into "this
+        # folio's own words" just because it has no melodic content.
+        raw_text = "alpha beta gamma delta"
+        volpiano = "a---b77---4"
+        _, _, continuation_words, _ = _parse_row_words_and_anchors(
+            raw_text, volpiano
+        )
+        assert continuation_words == ["gamma", "delta"]
+        assert _carry_words_for_gap(raw_text, volpiano, skip=0) == (
+            ["gamma", "delta"]
+        )
+
 
 class TestMidWordBreaks:
     """Tests for MidWordBreak population in build_flat_text_and_anchors."""
@@ -400,7 +509,7 @@ class TestPipeSeparatorOffsetEdgeCases:
         # correction to the continuation words it prepends onto the next
         # folio's word list.
         rows = [
-            _row("001r", "1", "alpha | beta gamma delta epsilon",
+            _row("001v", "1", "alpha | beta gamma delta epsilon",
                  volpiano="a---b---c---d77e---f"),
             _row("002r", "2", "zeta"),
         ]
