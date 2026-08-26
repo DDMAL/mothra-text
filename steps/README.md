@@ -167,19 +167,45 @@ Builds `FlatTextData` from a Cantus CSV:
    followed by a real folio that still picked up an earlier folio's leftover
    continuation via the CSV-scan below).
 4. Only when no `prev_folio_state` is given at all, and `infer_continuation=True`
-   (default), automatically finds the immediately preceding folio by CSV ordering (not all
+   (default), automatically finds the nearest preceding folio by CSV ordering (not all
    preceding history — an intervening folio with no `77` would otherwise let a stale
    break from much earlier get misattributed) and, if its last row's volpiano has `77`,
-   prepends the post-77 words as a virtual ChantSpan (sequence 0). This means a single
-   standalone folio run does not need to be chained to recover a mid-chant page
-   boundary. **Caveat:** "immediately preceding folio by CSV ordering" is not the same
-   as "the folio that actually precedes this one in a given run" — if a run
-   intentionally skips a folio that WAS the true predecessor, this heuristic has no way
-   to know that and will still attribute the skipped folio's continuation to whichever
-   folio is being processed now. Callers that already know actual run-time adjacency
-   (`run_chain.py`, `text-service`'s batch endpoint) pass `infer_continuation=False`
-   explicitly whenever their own contiguity check fails, rather than relying on this
-   CSV-only heuristic to catch that case.
+   prepends the words belonging to the target's own physical position as a virtual
+   ChantSpan (sequence 0). This means a single standalone folio run does not need to be
+   chained to recover a mid-chant page boundary.
+
+   The CSV-visible predecessor is not always the physically preceding folio — a folio
+   with no chant starting on it gets no CSV row at all (mothra-text#42), so it is
+   invisible to this scan. `build_flat_text_and_anchors` accounts for that gap: it
+   counts how many physical folio-sides separate the CSV-visible predecessor from the
+   target (via `_folio_linear_index`, which treats consecutive recto/verso sides as
+   consecutive integers regardless of CSV presence), and uses `_carry_words_for_gap` to
+   select the matching `page_break_77`-delimited segment of the predecessor's row —
+   segment 0 for a true immediate predecessor, segment 1 when one row-less folio sits in
+   between, and so on. A row normally has at most one `77`, but when a row-less folio's
+   own text is embedded inside a neighbour's row, a *second* `77` marks where that
+   folio's text ends and the next folio's begins (mothra-text#55). When the row does not
+   have enough `77`s to reach as far as the target, no continuation is added — the
+   row-less folio(s) in between absorbed everything, or there genuinely is none.
+
+   Not every extra `77` in a row is a real folio boundary, though: some rows end
+   `...<word>77---4` with nothing volpiano-encoded after the break — often a doxology
+   whose routine cadence was never re-notated, even though the raw fulltext has a few
+   more (untranscribed) words past it. `_parse_row_structure` drops that kind of
+   trailing, content-free `77` rather than splitting it into its own segment, so those
+   trailing words stay attached to whichever real break precedes them instead of being
+   misattributed to a folio further away. Confirmed against real data: CH-Fco Ms. 2's
+   `002v` row has exactly this shape (a genuine `77` into `003r`, then a dangling `77`
+   right before the doxology's "et in secula seculorum amen") — the manuscript images
+   show that whole phrase is still on `003r`, not `003v`.
+
+   **Caveat:** this only resolves gaps caused by CSV-row-less folios, using evidence
+   from the row's own break structure. It still cannot know about a run that
+   *intentionally* skips a folio that otherwise has its own CSV row — that's a
+   different scenario, not a gap in the CSV. Callers that already know actual run-time
+   adjacency (`run_chain.py`, `text-service`'s batch endpoint) pass
+   `infer_continuation=False` explicitly whenever their own contiguity check fails,
+   rather than relying on this CSV-only heuristic to catch that case.
 5. Cantus `|` phrase separators (e.g. an antiphon and its verse combined in one row)
    are their own whitespace-delimited token in `fulltext_ms`/`fulltext_standardized`
    and are stripped entirely by `clean_text()`, but the row's `volpiano` field still

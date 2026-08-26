@@ -346,7 +346,19 @@ The Cantus CSV has one row per chant; each row contains `fulltext_ms` (manuscrip
 - For each segment, counts word groups (stretches between `---` with at least one note letter)
 - Detects mid-word line breaks (when a segment after `7` starts with `--`, its first group is a mid-word continuation, not a new word)
 - Records `(word_index, anchor_type)` pairs for each break
-- When a `77` is found, all words after it are `continuation_words` for the next folio
+- When a `77` is found, all words after it are `continuation_words` for the next folio.
+  A row normally has at most one `77`, but when a physically intervening folio has no
+  CSV row of its own (no chant starts there, mothra-text#42), its text is embedded in
+  the preceding row too, marked off by a *second* `77` — `_parse_row_structure()` (the
+  shared core `_parse_row_words_and_anchors()` and `_carry_words_for_gap()` both build
+  on) records every `77` position, not just the first, so `_carry_words_for_gap()` can
+  pick out the segment belonging to a folio further away (mothra-text#55). A trailing
+  `77` with no volpiano word-group after it (e.g. `...<word>77---4`, common on a
+  doxology whose cadence was never re-notated even though the raw fulltext has a few
+  more words past it) is collapsed back into the segment before it rather than treated
+  as its own boundary — confirmed against CH-Fco Ms. 2's `002v` row, whose real second
+  `77` is exactly this dangling shape and whose "et in secula seculorum amen" tail is
+  still on `003r` per the manuscript images, not on `003v`
 
 After processing all folio rows, `FlatTextData` contains:
 - `words`: flat list of all words on this folio
@@ -356,7 +368,7 @@ After processing all folio rows, `FlatTextData` contains:
 - `continuation_words`: words physically on the next folio (no separate CSV row for them)
 - `initial_pointer`: start position for NW alignment (0 unless continuation was prepended)
 
-**Continuation handling:** when `prev_folio_state` is provided, its `remaining_words` are prepended to `flat_text.words`. When it's absent, the code scans preceding CSV rows for the last row with a `77` break and automatically infers the carry-over (`infer_continuation=True`). If no continuation is found and the first word of the folio is lowercase, a `continuation_missing` validation flag is emitted.
+**Continuation handling:** when `prev_folio_state` is provided, its `remaining_words` are prepended to `flat_text.words`. When it's absent, the code scans preceding CSV rows for the nearest row with a `77` break and automatically infers the carry-over (`infer_continuation=True`). That predecessor may not be the physically adjacent folio — a row-less folio (mothra-text#42) can sit in between — so the scan counts the physical folio-side gap (`_folio_linear_index`) and asks `_carry_words_for_gap()` for the matching `77`-delimited segment of the predecessor's row, rather than always taking everything after the first `77`; if the row doesn't have enough `77`s to reach that far, no continuation is added (mothra-text#55). If no continuation is found and the first word of the folio is lowercase, a `continuation_missing` validation flag is emitted.
 
 **Suffix probe words:** for the no-volpiano folio-start-location feature — words from the preceding folio's last chant stored for use in `pre_start_suffix_align`.
 
