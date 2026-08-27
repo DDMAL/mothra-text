@@ -422,6 +422,14 @@ its text in `gt_lookup` and lays out word bounding boxes using a uniform
 pixels-per-character formula. Falls back to recognition-based segmentation and logs a
 warning when `gt_lookup` returns `None`.
 
+Each resulting word segment is stamped with `source` (`"gt"` or `"fallback"`) at build
+time, when the GT-vs-fallback decision is actually known. `_build_pipeline_payload`
+reads this tag directly off the word node (`word_node.get("source", "fallback")`)
+rather than re-deriving it later from `manifest.get(line_node.label)` — line labels can
+shift after this step's own `collection.update()` call triggers HTRflow's
+`Collection.relabel()`, which would desync a label-based lookup from the manifest it
+was built against (mothra-text#59).
+
 ---
 
 ## Running the tests

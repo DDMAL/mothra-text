@@ -824,9 +824,7 @@ def _build_pipeline_payload(
                 "label": word_node.label,
                 "text": word_node.text or "",
                 "bbox": [wbbox.xmin, wbbox.ymin, wbbox.xmax, wbbox.ymax],
-                "source": (
-                    "gt" if manifest.get(line_node.label) else "fallback"
-                ),
+                "source": word_node.get("source", "fallback"),
                 "syllables": syllables,
             })
         lines.append({
