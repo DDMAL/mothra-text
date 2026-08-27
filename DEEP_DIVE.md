@@ -198,7 +198,7 @@ In **Cantus-aligned mode**, this is the most complex stage. See Section 5 for a 
 For each active leaf (line node):
 1. `gt_lookup(node)` returns the Cantus text fragment for that label from the manifest.
 2. If GT text is available: `_bbox_word_segmentation()` divides the line's pixel width proportionally by character count (`pixels_per_char = width // len(text)`), creating one child node per word.
-3. If GT text is empty/None: `_fallback_word_segmentation()` uses `node.text` (OCR output) instead. The word box's `source` field is set to `"fallback"` in `_build_pipeline_payload`.
+3. If GT text is empty/None: `_fallback_word_segmentation()` uses `node.text` (OCR output) instead. Either way, `_bbox_word_segmentation()` stamps the word box's `source` field (`"gt"` or `"fallback"`) directly into each segment's data *here*, at build time — not re-derived later from a line label, which HTRflow's `Collection.relabel()` (fired by this step's own `collection.update()` call) can shift out of sync with the manifest it was built against. See mothra-text#59 and [§11 "Source tagged at build time, not re-derived from labels"](#source-tagged-at-build-time-not-re-derived-from-labels).
 
 The geometry is purely horizontal — word bboxes have the full line height and are stacked left-to-right without overlap.
 
@@ -703,9 +703,11 @@ Rather than requiring the user to pass an explicit `--ocr-only` flag, the mode i
 
 NW alignment runs on fused lines (one logical text line = potentially multiple BLLA segments). The fused-line OCR text is the concatenation of constituent OCR texts. After allocation, `_defuse_manifest` distributes words back to constituent labels proportionally by pixel width. This means the fused grouping is transparent to all downstream steps (Stages 5 and 6 operate on original node labels).
 
-### Source field truthiness, not key presence
+### Source tagged at build time, not re-derived from labels
 
-`_build_pipeline_payload` marks a word as `source="gt"` using `manifest.get(line_node.label)` (falsy check), not `line_node.label in manifest` (key existence). These diverge for lines that received an empty-string GT assignment (e.g. a line with no text in the Cantus CSV). `GroundTruthWordSegmentation` also uses `if not gt_text:` to trigger fallback. The two checks must agree — an empty-string assignment means no GT text was available, so the word should be `"fallback"`.
+`GroundTruthWordSegmentation` stamps each word segment's `source` (`"gt"`/`"fallback"`) itself, at the moment `if not gt_text:` decides GT-vs-fallback (truthiness, so a line with an empty-string GT assignment — e.g. no text in the Cantus CSV — correctly falls back). `_build_pipeline_payload` then just reads `word_node.get("source", "fallback")` off the word node.
+
+This used to be the other way around: `_build_pipeline_payload` re-derived `source` at export time via `manifest.get(line_node.label)`. That broke (mothra-text#59) whenever a pre-fusion filter (the off-area filter, §2 Stage 4 point 4, or the `music_boxes` filter, point 3) dropped a node before Stage 4: labels stayed consistent through the manifest build and through Stage 5's `gt_lookup(node)` call, but Stage 5's own `collection.update()` fires HTRflow's `Collection.relabel()` (`htrflow/volume/volume.py`), which renumbers every later line to close the gap left by the dropped node. From then on, `manifest` (keyed by the pre-relabel labels) no longer matched `line_node.label` (the post-relabel labels), so the export-time lookup missed even though the correct GT text was already baked into the word node. Tagging at build time — when the answer is known and before any relabel can happen — sidesteps label stability entirely, so it's immune to any future step that triggers a relabel between manifest-build and export, not just this one case.
 
 ### Regularized output naming via `make_output_stem()`
 

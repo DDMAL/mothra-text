@@ -43,12 +43,19 @@ def _bbox_word_segmentation(
     node: SegmentNode,
     words: list[str],
     text: str,
+    source: str = "fallback",
 ) -> Result:
     """Divide a line node into per-word bounding boxes by character width.
 
     Uses pixels-per-character geometry (node.width / len(text)) to allocate
     horizontal space for each word.  Returns a word-segmentation Result with
     bbox-based segments (no mask required).
+
+    Each segment's data is stamped with `source` (e.g. "gt" or "fallback")
+    so that downstream consumers (e.g. _build_pipeline_payload) can read
+    provenance directly off the resulting word node instead of re-deriving
+    it later from a line label, which may have since shifted due to
+    Collection.relabel() (see mothra-text#59).
     """
     chars = max(len(text), 1)
     pixels_per_char = max(1, node.width // chars)
@@ -58,12 +65,15 @@ def _bbox_word_segmentation(
         x2 = min(x1 + pixels_per_char * (len(word) + 1), node.width)
         bboxes.append((x1, 0, x2, node.height))
         x1 = x2
-    return Result.word_segmentation_result(
+    result = Result.word_segmentation_result(
         words=words,
         orig_shape=(node.height, node.width),
         metadata={},
         bboxes=bboxes,
     )
+    for segment in result.segments:
+        segment.data["source"] = source
+    return result
 
 
 def _ground_truth_word_segmentation(
@@ -91,7 +101,7 @@ def _ground_truth_word_segmentation(
     words = gt_text.split()
     if not words:
         return None
-    return _bbox_word_segmentation(node, words, gt_text)
+    return _bbox_word_segmentation(node, words, gt_text, source="gt")
 
 
 def _fallback_word_segmentation(node: SegmentNode) -> Result:
@@ -104,7 +114,7 @@ def _fallback_word_segmentation(node: SegmentNode) -> Result:
     words = text.split()
     if not words:
         words = [text] if text else [""]
-    return _bbox_word_segmentation(node, words, text or " ")
+    return _bbox_word_segmentation(node, words, text or " ", source="fallback")
 
 
 class GroundTruthWordSegmentation(_WordSegmentationBase):

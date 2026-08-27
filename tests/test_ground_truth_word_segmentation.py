@@ -68,6 +68,14 @@ class TestGroundTruthWordSegmentationFunction:
         words = [seg.data[TEXT_RESULT_KEY].top_candidate() for seg in result.segments]
         assert words == ["dominus", "omnipotens"]
 
+    def test_tags_segments_with_gt_source(self):
+        # mothra-text#59: source must be tagged here, at build time, rather
+        # than re-derived later from a label that can shift after relabel.
+        node = make_node(width=300, height=30)
+        result = _ground_truth_word_segmentation(node, lambda _: "dominus omnipotens")
+        assert result is not None
+        assert all(seg.data["source"] == "gt" for seg in result.segments)
+
 
 # ---------------------------------------------------------------------------
 # GroundTruthWordSegmentation.run()
@@ -209,3 +217,10 @@ class TestFallbackWordSegmentation:
         assert (
             result.segments[0].data[TEXT_RESULT_KEY].top_candidate() == "   "
         )
+
+    def test_tags_segments_with_fallback_source(self):
+        # mothra-text#59: fallback-path segments must be tagged "fallback",
+        # matching the default _build_pipeline_payload falls back to.
+        node = make_node(text="dominus omnipotens", width=300, height=30)
+        result = _fallback_word_segmentation(node)
+        assert all(seg.data["source"] == "fallback" for seg in result.segments)

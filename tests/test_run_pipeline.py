@@ -477,3 +477,65 @@ class TestOffAreaFilterBlock:
             collection = _run_up_to_offarea_filter(page)
         assert node in page.children
         assert collection._offarea_filter_dropped == []
+
+
+class _FakeWordNode:
+    """Node-like fake exposing the .get() interface _build_pipeline_payload
+    reads `source` through (see htrflow.volume.node.Node.get)."""
+
+    def __init__(self, label, bbox, text="", source=None):
+        self.label = label
+        self.bbox = bbox
+        self.text = text
+        self.children = []
+        self.data = {} if source is None else {"source": source}
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+
+def _fake_line_node(label, word):
+    return types.SimpleNamespace(
+        label=label,
+        bbox=_bbox(0, 0, 100, 10),
+        polygon=types.SimpleNamespace(points=[types.SimpleNamespace(x=0, y=0)]),
+        text=word.text,
+        children=[word],
+    )
+
+
+class TestBuildPipelinePayloadSourceTag:
+    """Regression coverage for mothra-text#59.
+
+    `source` must be read off the word node's own data (stamped at Stage 5
+    build time by GroundTruthWordSegmentation), not re-derived from
+    manifest.get(line_node.label) -- a relabel between Stage 5 and export
+    can desync line_node.label from the keys `manifest` was built with, so
+    tagging must not depend on that agreement holding.
+    """
+
+    def test_source_read_from_word_node_survives_label_manifest_mismatch(self):
+        word = _FakeWordNode(
+            "line0_word0", _bbox(0, 0, 10, 10), text="dominus", source="gt"
+        )
+        line = _fake_line_node("line0", word)
+        collection = _FakeCollection(_FakePage([line]))
+
+        # Keyed by a label that does NOT match line.label, simulating the
+        # post-Stage-5-relabel drift from mothra-text#59.
+        manifest = {"stale_label_that_does_not_match": "dominus"}
+
+        payload = run_pipeline._build_pipeline_payload(
+            collection, "fake.jpg", manifest
+        )
+
+        assert payload["lines"][0]["words"][0]["source"] == "gt"
+
+    def test_source_defaults_to_fallback_when_untagged(self):
+        word = _FakeWordNode("line0_word0", _bbox(0, 0, 10, 10), text="x")
+        line = _fake_line_node("line0", word)
+        collection = _FakeCollection(_FakePage([line]))
+
+        payload = run_pipeline._build_pipeline_payload(collection, "fake.jpg", {})
+
+        assert payload["lines"][0]["words"][0]["source"] == "fallback"
