@@ -360,13 +360,15 @@ def main() -> None:
     for i, (image_path, folio, out_json, mei_path, folio_label) in enumerate(
         zip(images, args.folios, export_paths, mei_paths, folio_labels)
     ):
-        # infer_continuation defaults True for a run's first folio (no true
-        # predecessor to know either way) or when this folio genuinely
-        # follows the previous one. When contiguity fails below, prev_state
-        # is reset - but build_flat_text_and_anchors' own infer_continuation
-        # default would otherwise still scan the CSV itself for "the nearest
-        # preceding folio with a 77 break" and re-derive the same wrong
-        # continuation independent of that reset, so it must be suppressed too.
+        # infer_continuation is always True: whenever prev_state is
+        # unavailable (a run's first folio, or a non-contiguous one reset
+        # below), this lets build_flat_text_and_anchors fall back to its own
+        # CSV-scan exactly as if the folio were run standalone. That scan is
+        # hop-aware (mothra-text#55/#56): it finds the nearest preceding
+        # folio that actually has CSV rows and only carries words as far as
+        # that row's own volpiano breaks reach, so a skipped rowless folio's
+        # continuation can no longer be misattributed - the scan just
+        # returns none in that case (mothra-text#58).
         infer_continuation = True
         if prev_folio is not None and not _are_contiguous(prev_folio, folio):
             logger.warning(
@@ -375,7 +377,6 @@ def main() -> None:
                 prev_folio,
             )
             prev_state = None
-            infer_continuation = False
 
         mothra_json_path: "str | None" = None
         if mothra_dir is not None:

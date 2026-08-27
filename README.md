@@ -100,10 +100,9 @@ python run_pipeline.py --image 007v.jpg --folio 007v --source-id 123672 \
 **Multi-folio runs (automated):** Use `run_chain.py` to chain any number of consecutive
 folios in a single command — intermediate `FolioState` sidecar files are managed
 automatically. If the provided folios are not actually consecutive pages (recto→verso→next
-recto), `run_chain.py` logs a warning, resets the carry-over state, and passes
-`infer_continuation=False` for that folio — otherwise `build_flat_text_and_anchors`'
-own CSV-scanning fallback (see `steps/README.md`) would silently re-derive the same
-stale continuation on its own, independent of the reset:
+recto), `run_chain.py` logs a warning and resets the carry-over state, then falls back to
+`build_flat_text_and_anchors`' own CSV-scanning fallback (see `steps/README.md`) for that
+folio — the same one a standalone run of it would use:
 
 ```bash
 # Auto-named MEI JSON outputs (recommended for batch use)

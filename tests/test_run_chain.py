@@ -165,10 +165,13 @@ class TestRunOne:
 
 class TestMainContiguityWiring:
     """Integration-level tests for main()'s per-folio loop: a failed
-    contiguity check must also suppress infer_continuation (commit
-    537980c), not just reset prev_state. Exercised via main() itself
-    (not just _are_contiguous in isolation) since the wiring lives in
-    the loop, not in _are_contiguous.
+    contiguity check resets prev_state, but (mothra-text#58) leaves
+    infer_continuation True so build_flat_text_and_anchors' hop-aware
+    CSV-scan (mothra-text#55/#56) can still supply the correct continuation
+    when the true predecessor has its own CSV row - exactly as a standalone
+    run of that folio would. Exercised via main() itself (not just
+    _are_contiguous in isolation) since the wiring lives in the loop, not in
+    _are_contiguous.
     """
 
     def _install_fake_run_pipeline_modules(
@@ -202,7 +205,7 @@ class TestMainContiguityWiring:
             paths.append(str(p))
         return paths
 
-    def test_non_contiguous_folio_runs_with_infer_continuation_false(
+    def test_non_contiguous_folio_resets_state_but_keeps_infer_continuation_true(
         self, tmp_path, monkeypatch
     ):
         calls = []
@@ -225,7 +228,7 @@ class TestMainContiguityWiring:
 
         assert len(calls) == 2
         assert calls[0]["infer_continuation"] is True
-        assert calls[1]["infer_continuation"] is False
+        assert calls[1]["infer_continuation"] is True
         assert calls[1]["prev_folio_state"] is None
 
     def test_contiguous_folios_keep_infer_continuation_true(

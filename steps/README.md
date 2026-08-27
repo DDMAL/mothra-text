@@ -211,12 +211,16 @@ Builds `FlatTextData` from a Cantus CSV:
    show that whole phrase is still on `003r`, not `003v`.
 
    **Caveat:** this only resolves gaps caused by CSV-row-less folios, using evidence
-   from the row's own break structure. It still cannot know about a run that
-   *intentionally* skips a folio that otherwise has its own CSV row — that's a
-   different scenario, not a gap in the CSV. Callers that already know actual run-time
-   adjacency (`run_chain.py`, `text-service`'s batch endpoint) pass
-   `infer_continuation=False` explicitly whenever their own contiguity check fails,
-   rather than relying on this CSV-only heuristic to catch that case.
+   from the row's own break structure. It has no notion of "which folios a given run
+   included" at all — it always operates on the CSV's own physical/row adjacency,
+   regardless of whether the folio actually run before the target was its true
+   predecessor. That is what makes it safe for callers to rely on unconditionally: a
+   run that skips a folio which *does* have its own CSV row still resolves correctly
+   (the scan finds that row directly), and a skipped CSV-row-less folio still yields no
+   continuation rather than a stale one, exactly as described above. `run_chain.py`
+   only resets `prev_folio_state` on a failed contiguity check and otherwise leaves
+   `infer_continuation=True`, falling back to this scan the same way a standalone run
+   of that folio would (mothra-text#58).
 5. Cantus `|` phrase separators (e.g. an antiphon and its verse combined in one row)
    are their own whitespace-delimited token in `fulltext_ms`/`fulltext_standardized`
    and are stripped entirely by `clean_text()`, but the row's `volpiano` field still
