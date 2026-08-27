@@ -61,8 +61,6 @@ python run_pipeline.py \
 | `--output-dir PATH` | Directory for auto-named MEI JSON output. Requires `--source-id`/`--csv` and `--folio`. Output is named `{RISM-code}_{shelfmark}_{folio}.json` (e.g. `CH-E_611_001r.json`). The `"folio"` field inside the JSON also uses this regularized name. |
 | `--no-skip-misdetected-lines` | Allocate Cantus text to every detected line, including boxes far too small to hold it whose OCR read nothing. By default such boxes are flagged and skipped (see 1d) |
 | `--misdetect-width-ratio FLOAT` | Maximum box width, as a fraction of the page's typical text-line width, for a line to be eligible to be skipped as a misdetection (default 0.35) |
-| `--no-drop-offarea-boxes` | Allocate Cantus text to every detected line, including boxes lying almost entirely outside the main chant text area (folio numbers, running heads, marginal notes). By default such boxes are dropped before fusion (see 1e) |
-| `--area-keep-threshold FLOAT` | Minimum fraction of a line's own area that must overlap the main chant text area for the line to be kept (default 0.50) |
 | `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail; in OCR-only mode also prints a startup banner and lists any ignored flags |
 
 **OCR-only mode:** When neither `--csv` nor `--source-id` is given, the pipeline skips
@@ -137,8 +135,6 @@ python run_chain.py \
 | `--skip-masking` | Skip text-region masking even if `--mothra-jsons-dir` is given. |
 | `--no-skip-misdetected-lines` | Allocate Cantus text to every detected line, including boxes far too small to hold it whose OCR read nothing (see 1d). |
 | `--misdetect-width-ratio FLOAT` | Maximum box width, as a fraction of the page's typical text-line width, for a line to be eligible to be skipped as a misdetection (default 0.35). |
-| `--no-drop-offarea-boxes` | Allocate Cantus text to every detected line, including boxes lying almost entirely outside the main chant text area (see 1e). |
-| `--area-keep-threshold FLOAT` | Minimum fraction of a line's own area that must overlap the main chant text area for the line to be kept (default 0.50). |
 
 All model and device flags from `run_pipeline.py` (`--segmentation-model`,
 `--recognition-model`, `--device`, `--stub-mode`, `--column-count`,
@@ -307,8 +303,9 @@ fusion, on `collection._offarea_filter_dropped`.
 INFO  folio 009v: pre-NW drop — line bbox [492,1705,633,1799] lies outside the main text area (overlap=0.00)
 ```
 
-Like 1d this needs no external annotation and protects CLI and `run_chain.py` runs too. Pass
-`--no-drop-offarea-boxes` to disable, or raise `--area-keep-threshold` to drop fewer boxes.
+Like 1d this needs no external annotation and protects CLI and `run_chain.py` runs too.
+Library-only (`drop_offarea_boxes`/`area_keep_threshold` on `run()`) — not exposed as a CLI
+flag, since both thresholds were tuned against real, manually-verified data.
 
 **Scope:** this only catches boxes outside the block's true x/y footprint. Marginalia that
 sits *within* the block — an interlinear rubric cue between two real lines, for instance —
