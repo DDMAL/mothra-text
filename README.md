@@ -61,6 +61,8 @@ python run_pipeline.py \
 | `--output-dir PATH` | Directory for auto-named MEI JSON output. Requires `--source-id`/`--csv` and `--folio`. Output is named `{RISM-code}_{shelfmark}_{folio}.json` (e.g. `CH-E_611_001r.json`). The `"folio"` field inside the JSON also uses this regularized name. |
 | `--no-skip-misdetected-lines` | Allocate Cantus text to every detected line, including boxes far too small to hold it whose OCR read nothing. By default such boxes are flagged and skipped (see 1d) |
 | `--misdetect-width-ratio FLOAT` | Maximum box width, as a fraction of the page's typical text-line width, for a line to be eligible to be skipped as a misdetection (default 0.35) |
+| `--no-drop-offarea-boxes` | Allocate Cantus text to every detected line, including boxes lying almost entirely outside the main chant text area (folio numbers, running heads, marginal notes). By default such boxes are dropped before fusion (see 1e) |
+| `--area-keep-threshold FLOAT` | Minimum fraction of a line's own area that must overlap the main chant text area for the line to be kept (default 0.50) |
 | `--debug-ocr` | Print per-line OCR transcripts and NW alignment detail; in OCR-only mode also prints a startup banner and lists any ignored flags |
 
 **OCR-only mode:** When neither `--csv` nor `--source-id` is given, the pipeline skips
@@ -136,6 +138,8 @@ python run_chain.py \
 | `--skip-masking` | Skip text-region masking even if `--mothra-jsons-dir` is given. |
 | `--no-skip-misdetected-lines` | Allocate Cantus text to every detected line, including boxes far too small to hold it whose OCR read nothing (see 1d). |
 | `--misdetect-width-ratio FLOAT` | Maximum box width, as a fraction of the page's typical text-line width, for a line to be eligible to be skipped as a misdetection (default 0.35). |
+| `--no-drop-offarea-boxes` | Allocate Cantus text to every detected line, including boxes lying almost entirely outside the main chant text area (see 1e). |
+| `--area-keep-threshold FLOAT` | Minimum fraction of a line's own area that must overlap the main chant text area for the line to be kept (default 0.50). |
 
 All model and device flags from `run_pipeline.py` (`--segmentation-model`,
 `--recognition-model`, `--device`, `--stub-mode`, `--column-count`,
@@ -281,6 +285,36 @@ shifted the rest of the page. Keep this rule on for masked and unmasked runs ali
 
 Not applicable in OCR-only mode: without Cantus text there is no shared text pointer for a
 non-text box to corrupt.
+
+---
+
+### 1e. Main text area filtering
+
+BLLA also draws boxes on marginalia that sit clearly outside the chant text block itself —
+folio numbers, running heads, left-margin scribal notes (e.g. a psalm/canticle incipit cue
+like "david"). Unlike 1d, this class of box is not offered too few characters to hold — its
+OCR often reads fine — so it isn't caught by the misdetect rule at all, and by the time
+`fuse_colinear_segments` runs, a box that vertically overlaps a real line has already been
+merged into it, hiding its marginal position from every later stage.
+
+Before fusion, the pipeline computes the main chant text area per column from the page's own
+line geometry: boxes are grouped into rows by y-overlap (the same rule `fuse_colinear_segments`
+itself uses), and a row's *combined* width — not any single box's width — decides whether it
+anchors the text block, so a real line that BLLA fragmented into several small boxes is still
+recognized as real. Any box lying almost entirely outside the resulting area is dropped before
+fusion, on `collection._offarea_filter_dropped`.
+
+```
+INFO  folio 009v: pre-NW drop — line bbox [492,1705,633,1799] lies outside the main text area (overlap=0.00)
+```
+
+Like 1d this needs no external annotation and protects CLI and `run_chain.py` runs too. Pass
+`--no-drop-offarea-boxes` to disable, or raise `--area-keep-threshold` to drop fewer boxes.
+
+**Scope:** this only catches boxes outside the block's true x/y footprint. Marginalia that
+sits *within* the block — an interlinear rubric cue between two real lines, for instance —
+looks geometrically identical to a genuine short line and is deliberately left alone; telling
+those apart needs region classification, not geometry, and is out of scope here.
 
 ---
 

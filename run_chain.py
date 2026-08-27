@@ -156,6 +156,8 @@ def _run_one(
             padding=padding,
             skip_misdetected_lines=not args.no_skip_misdetected_lines,
             misdetect_width_ratio=args.misdetect_width_ratio,
+            drop_offarea_boxes=not args.no_drop_offarea_boxes,
+            area_keep_threshold=args.area_keep_threshold,
         )
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)
@@ -243,6 +245,18 @@ def main() -> None:
         help="Maximum box width, as a fraction of the page's typical text-line "
              "width, for a line to be eligible to be skipped as a misdetection "
              "(default: 0.35).",
+    )
+    parser.add_argument(
+        "--no-drop-offarea-boxes", action="store_true", default=False,
+        help="Allocate Cantus text to every detected line, including boxes "
+             "lying almost entirely outside the main chant text area (folio "
+             "numbers, running heads, marginal notes). By default such boxes "
+             "are dropped before fusion.",
+    )
+    parser.add_argument(
+        "--area-keep-threshold", type=float, default=0.50, metavar="FLOAT",
+        help="Minimum fraction of a line's own area that must overlap the "
+             "main chant text area for the line to be kept (default: 0.50).",
     )
     parser.add_argument("--debug-ocr", action="store_true", default=False,
                         help="Print per-line OCR transcripts and NW alignment detail "

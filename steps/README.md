@@ -9,7 +9,8 @@ on medieval chant manuscripts.
 ```
 KrakenSegmentation  →  cluster_columns
                     →  KrakenRecognition
-                    →  [pre-NW music filter]   # drops lines overlapping music regions
+                    →  [pre-NW music filter]     # drops lines overlapping music regions
+                    →  [pre-NW off-area filter]  # drops lines outside the main text area
                     →  fuse_colinear_segments
                     →  allocate_lines (NW chant allocator)
                     →  GroundTruthWordSegmentation
@@ -18,6 +19,16 @@ KrakenSegmentation  →  cluster_columns
 
 The pre-NW music filter is not a separate step class — it runs inline in `run_pipeline.run()`
 when `music_boxes` is provided. See `run_pipeline.py` and the root `README.md` (§1c) for details.
+
+The pre-NW off-area filter is likewise inline in `run_pipeline.run()`, gated on
+`drop_offarea_boxes` (default `True`). Unlike the music filter it needs no external
+annotation — `_main_text_area` derives the main chant text area per column from BLLA's own
+line geometry, grouping lines into rows by y-overlap (the same rule `fuse_colinear_segments`
+uses) so a real line fragmented into several small boxes is judged by its rows' combined
+width, not any single box's. See the root `README.md` (§1e) for the user-facing description
+and mothra-text#53 for the design rationale, including two approaches that were tried and
+rejected before this one (fixed-distance padding, and extending the area via left-edge
+alignment) because they either missed real marginalia or put genuine short lines at risk.
 
 ---
 
@@ -416,8 +427,8 @@ conda activate line-seg-eval
 pytest tests/ -v
 ```
 
-341 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
-`test_nw_alignment.py`, `test_nw_folio_state.py`, and others.
+400 tests across `test_column_clustering.py`, `test_nw_flat_text.py`,
+`test_nw_alignment.py`, `test_nw_folio_state.py`, `test_run_pipeline.py`, and others.
 
 ---
 
@@ -448,8 +459,15 @@ pytest tests/ -v
   being allocated, since the box is deliberately exempted from the column force-close.
 - **Misdetected-line skipping cannot catch plausibly-sized non-text boxes.** A box wide
   enough to hold the word it is offered passes condition 4 whatever it actually contains —
-  e.g. a 379px neume group offered `in`, or a 102px margin annotation offered `Ne`. Two
-  further signals would separate these from real lines and are worth evaluating against
-  real folios before being enabled: whether the box's y-centre sits **off the page's
-  regular text-line pitch**, and whether it lies **outside the text block in x**. The
-  latter would also catch marginal folio numbers and other marginalia.
+  e.g. a 379px neume group offered `in`, or a 102px margin annotation offered `Ne`. A box
+  lying outside the main chant text area entirely (folio numbers, running heads, marginal
+  notes) is caught instead by the separate pre-fusion off-area filter (`_main_text_area`,
+  `run_pipeline.py`; root `README.md` §1e) — a box's y-centre sitting off the page's
+  regular text-line pitch, but still inside the block's x/y footprint, remains uncaught by
+  either mechanism.
+- **The off-area filter only catches marginalia outside the block's true footprint.** A
+  box that sits *within* the main chant text area's x/y extent — an interlinear rubric cue
+  sandwiched between two real lines, for instance — is geometrically indistinguishable from
+  a genuine short line and is deliberately left alone. On CH-Fco Ms. 2 009v this describes
+  most of the marginal rubric boxes on the page (see mothra-text#52's 2026-08-27 comment);
+  telling them apart from real text needs region classification, not geometry.

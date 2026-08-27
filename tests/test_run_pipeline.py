@@ -17,7 +17,14 @@ from unittest.mock import patch
 import pytest
 
 import run_pipeline
-from run_pipeline import _music_overlap_ratio
+from run_pipeline import (
+    _AreaBounds,
+    _area_overlap_ratio,
+    _main_text_area,
+    _music_overlap_ratio,
+    _row_groups,
+    _union_width,
+)
 
 
 def _bbox(x0, y0, x1, y1):
@@ -170,3 +177,303 @@ class TestMusicFilterBlock:
         )
         assert page.children == []
         assert len(collection._music_filter_dropped) == 1
+
+
+class TestRowGroups:
+    def test_empty_list_returns_empty(self):
+        assert _row_groups([]) == []
+
+    def test_single_node_forms_own_row(self):
+        node = _FakeNode("a", _bbox(0, 0, 10, 10))
+        assert _row_groups([node]) == [[node]]
+
+    def test_overlapping_nodes_group_into_one_row(self):
+        # Overlap of 6px against a 10px height -> 0.6 >= the 0.5 threshold.
+        a = _FakeNode("a", _bbox(0, 0, 10, 10))
+        b = _FakeNode("b", _bbox(20, 4, 30, 14))
+        assert _row_groups([a, b]) == [[a, b]]
+
+    def test_non_overlapping_nodes_form_separate_rows(self):
+        a = _FakeNode("a", _bbox(0, 0, 10, 10))
+        b = _FakeNode("b", _bbox(0, 30, 10, 40))
+        assert _row_groups([a, b]) == [[a], [b]]
+
+    def test_grouping_is_independent_of_input_order(self):
+        a = _FakeNode("a", _bbox(0, 20, 10, 30))
+        b = _FakeNode("b", _bbox(0, 0, 10, 10))
+        assert _row_groups([a, b]) == [[b], [a]]
+
+
+class TestUnionWidth:
+    def test_single_interval(self):
+        assert _union_width([(0, 10)], -100, 100) == 10
+
+    def test_overlapping_intervals_merge(self):
+        assert _union_width([(0, 10), (5, 15)], -100, 100) == 15
+
+    def test_adjacent_intervals_merge(self):
+        assert _union_width([(0, 10), (10, 20)], -100, 100) == 20
+
+    def test_gap_between_intervals_not_counted(self):
+        # Two 10px intervals with a real gap between them must sum to 20,
+        # not the 30px outer span -- the regression this helper exists to
+        # prevent (an outer-span version let a stray box inflate a row's
+        # apparent coverage; see mothra-text#53).
+        assert _union_width([(0, 10), (20, 30)], -100, 100) == 20
+
+    def test_clipping_to_bounds(self):
+        assert _union_width([(-5, 15)], 0, 10) == 10
+
+    def test_interval_entirely_outside_bounds_contributes_nothing(self):
+        assert _union_width([(200, 300)], 0, 10) == 0
+
+
+class TestMainTextArea:
+    def test_fragmented_row_becomes_x_reference(self):
+        # Five real chant lines, each ONE wide box, establish the column.
+        # A sixth physical line got fragmented by BLLA into three narrow
+        # side-by-side boxes that together span nearly the same width --
+        # it must be recognized even though no single fragment is
+        # individually wide (032r/040v/008r/009r shape).
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, 100 + i * 100, 900, 140 + i * 100))
+            for i in range(5)
+        ]
+        fragments = [
+            _FakeNode("f0", _bbox(100, 600, 300, 640)),
+            _FakeNode("f1", _bbox(320, 600, 600, 640)),
+            _FakeNode("f2", _bbox(620, 600, 900, 640)),
+        ]
+        bounds = _main_text_area(wide + fragments, split_x=None)
+        b = bounds[1]
+        assert b.xmin == pytest.approx(100)
+        assert b.xmax == pytest.approx(900)
+        assert b.ymin <= 600
+        assert b.ymax >= 640
+
+    def test_low_coverage_row_still_extends_y_at_035(self):
+        # A row whose members cover ~37.5% of the established column width
+        # (real gaps between pieces, doxology shape from 005r) must still
+        # extend the y-extent -- this is why y_reference_ratio is 0.35, not
+        # the 0.5 that was tried first and left this case uncaught.
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, 300 + i * 100, 900, 340 + i * 100))
+            for i in range(5)
+        ]
+        # Combined width = (200-100)+(500-400)+(700-600) = 300 of an 800
+        # column -> 37.5% coverage.
+        sparse_row = [
+            _FakeNode("s0", _bbox(100, 50, 200, 90)),
+            _FakeNode("s1", _bbox(400, 55, 500, 95)),
+            _FakeNode("s2", _bbox(600, 60, 700, 100)),
+        ]
+        bounds = _main_text_area(wide + sparse_row, split_x=None)
+        b = bounds[1]
+        assert b.ymin is not None and b.ymin <= 50
+
+    def test_isolated_narrow_row_does_not_extend_y(self):
+        # A single narrow, isolated box far from the reference lines (top-
+        # rubric / david shape) must NOT pull the y-extent out to cover it.
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, 300 + i * 100, 900, 340 + i * 100))
+            for i in range(5)
+        ]
+        marginal = _FakeNode("m", _bbox(910, 0, 950, 40))
+        bounds = _main_text_area(wide + [marginal], split_x=None)
+        b = bounds[1]
+        assert b.ymin == 300
+
+    def test_no_row_meets_y_coverage_leaves_y_axis_inert(self):
+        # Two equally-wide rows straddle a gap; their median-based x-extent
+        # sits in the middle where NEITHER original row actually reaches,
+        # so neither row's clipped coverage meets y_reference_ratio and the
+        # y-axis is left inert (None) rather than accidentally extended.
+        row_a = _FakeNode("a", _bbox(0, 0, 1000, 40))
+        row_b = _FakeNode("b", _bbox(2000, 100, 3000, 140))
+        bounds = _main_text_area([row_a, row_b], split_x=None)
+        b = bounds[1]
+        assert b.xmin == 1000 and b.xmax == 2000
+        assert b.ymin is None and b.ymax is None
+
+    def test_two_columns_get_independent_bounds(self):
+        col1 = [
+            _FakeNode(f"a{i}", _bbox(0, i * 100, 400, 40 + i * 100))
+            for i in range(4)
+        ]
+        col2 = [
+            _FakeNode(f"b{i}", _bbox(600, i * 100, 1000, 40 + i * 100))
+            for i in range(4)
+        ]
+        bounds = _main_text_area(col1 + col2, split_x=500)
+        assert bounds[1].xmax <= 500
+        assert bounds[2].xmin >= 500
+
+
+class TestAreaOverlapRatio:
+    def test_fully_inside_returns_one(self):
+        node = _bbox(0, 0, 10, 10)
+        assert _area_overlap_ratio(node, _AreaBounds(0, 20, 0, 20)) == 1.0
+
+    def test_fully_outside_returns_zero(self):
+        node = _bbox(0, 0, 10, 10)
+        bounds = _AreaBounds(100, 200, 100, 200)
+        assert _area_overlap_ratio(node, bounds) == 0.0
+
+    def test_partial_overlap(self):
+        node = _bbox(0, 0, 10, 10)
+        bounds = _AreaBounds(5, 20, 0, 20)
+        assert _area_overlap_ratio(node, bounds) == pytest.approx(0.5)
+
+    def test_unconstrained_x_axis_only_penalizes_on_y(self):
+        node = _bbox(0, 0, 10, 10)
+        bounds = _AreaBounds(None, None, 5, 20)
+        assert _area_overlap_ratio(node, bounds) == pytest.approx(0.5)
+
+    def test_both_axes_unconstrained_returns_one(self):
+        node = _bbox(0, 0, 10, 10)
+        bounds = _AreaBounds(None, None, None, None)
+        assert _area_overlap_ratio(node, bounds) == 1.0
+
+
+def _run_up_to_offarea_filter(
+    page,
+    drop_offarea_boxes=True,
+    area_keep_threshold=0.50,
+    column_count=1,
+    split_x=None,
+):
+    """Drive run_pipeline.run() through its off-area filter, then abort.
+
+    Same technique as _run_up_to_music_filter: mock Stages 1-3 and
+    Collection() to hand back `page` untouched (with music_boxes left at
+    its None default, so that earlier filter is a no-op), and let
+    fuse_colinear_segments -- the first call after both pre-Stage-4 filters
+    -- raise a sentinel so the real filter code's mutations on `page`/
+    `collection` can be inspected without mocking the rest of the pipeline.
+    """
+    fake_collection = _FakeCollection(page)
+    with patch("run_pipeline.Collection", return_value=fake_collection), \
+         patch("run_pipeline.KrakenSegmentation") as mock_seg, \
+         patch("run_pipeline.cluster_columns",
+               return_value=(["line0", "line1"], column_count, split_x)), \
+         patch("run_pipeline.KrakenRecognition") as mock_rec, \
+         patch("run_pipeline.fuse_colinear_segments",
+               side_effect=RuntimeError("STOP_AFTER_FILTER")):
+        mock_seg.return_value.run.return_value = fake_collection
+        mock_rec.return_value.run.return_value = fake_collection
+        with pytest.raises(RuntimeError, match="STOP_AFTER_FILTER"):
+            run_pipeline.run(
+                image_path="fake.jpg",
+                folio="001r",
+                drop_offarea_boxes=drop_offarea_boxes,
+                area_keep_threshold=area_keep_threshold,
+            )
+    return fake_collection
+
+
+class TestOffAreaFilterBlock:
+    def test_no_drop_offarea_boxes_flag_skips_filter(self):
+        nodes = [
+            _FakeNode("line0", _bbox(0, 0, 10, 10)),
+            _FakeNode("line1", _bbox(0, 20, 10, 30)),
+        ]
+        page = _FakePage(list(nodes))
+        collection = _run_up_to_offarea_filter(page, drop_offarea_boxes=False)
+        assert page.children == nodes
+        assert collection._offarea_filter_dropped == []
+
+    def test_too_few_lines_leaves_filter_inert(self):
+        lone = _FakeNode("lone", _bbox(0, 0, 10, 10), text="x")
+        page = _FakePage([lone])
+        collection = _run_up_to_offarea_filter(page)
+        assert lone in page.children
+        assert collection._offarea_filter_dropped == []
+
+    def test_isolated_offcolumn_box_dropped(self):
+        # Five wide reference lines establish the column; one small box far
+        # to the side (the "david" shape) must be dropped.
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, i * 100, 900, 40 + i * 100))
+            for i in range(5)
+        ]
+        marginal = _FakeNode("m", _bbox(0, 200, 40, 240), text="deus")
+        page = _FakePage(wide + [marginal])
+        collection = _run_up_to_offarea_filter(page)
+        assert marginal not in page.children
+        assert all(w in page.children for w in wide)
+        dropped_texts = [d["text"] for d in collection._offarea_filter_dropped]
+        assert dropped_texts == ["deus"]
+
+    def test_isolated_offrow_box_dropped_above_block(self):
+        # A small box well above the block, unaligned with anything (top-
+        # rubric / folio-number shape).
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, 300 + i * 100, 900, 340 + i * 100))
+            for i in range(5)
+        ]
+        header = _FakeNode("h", _bbox(700, 0, 800, 30), text="Fa")
+        page = _FakePage(wide + [header])
+        collection = _run_up_to_offarea_filter(page)
+        assert header not in page.children
+        assert len(collection._offarea_filter_dropped) == 1
+
+    def test_fragmented_real_line_kept(self):
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, i * 100, 900, 40 + i * 100))
+            for i in range(5)
+        ]
+        fragments = [
+            _FakeNode("f0", _bbox(100, 600, 300, 640), text="Qnoni"),
+            _FakeNode("f1", _bbox(320, 600, 600, 640), text="am"),
+            _FakeNode("f2", _bbox(620, 600, 900, 640), text="ego"),
+        ]
+        page = _FakePage(wide + fragments)
+        collection = _run_up_to_offarea_filter(page)
+        for f in fragments:
+            assert f in page.children
+        assert collection._offarea_filter_dropped == []
+
+    def test_low_coverage_fragmented_line_still_kept(self):
+        # The 005r doxology shape: real gaps between pieces, ~37.5%
+        # coverage -- this is the case that set y_reference_ratio to 0.35.
+        wide = [
+            _FakeNode(f"w{i}", _bbox(100, 300 + i * 100, 900, 340 + i * 100))
+            for i in range(5)
+        ]
+        sparse = [
+            _FakeNode("s0", _bbox(100, 50, 200, 90), text="oria"),
+            _FakeNode("s1", _bbox(400, 55, 500, 95), text="et"),
+            _FakeNode("s2", _bbox(600, 60, 700, 100), text="Sancto"),
+        ]
+        page = _FakePage(wide + sparse)
+        collection = _run_up_to_offarea_filter(page)
+        for s in sparse:
+            assert s in page.children
+        assert collection._offarea_filter_dropped == []
+
+    def test_two_column_box_evaluated_against_own_column(self):
+        col1 = [
+            _FakeNode(f"a{i}", _bbox(0, i * 100, 400, 40 + i * 100))
+            for i in range(4)
+        ]
+        col2 = [
+            _FakeNode(f"b{i}", _bbox(600, i * 100, 1000, 40 + i * 100))
+            for i in range(4)
+        ]
+        # Outside column 1's bounds but numerically inside column 2's --
+        # with split_x=500 it belongs to column 1 (xmin<500) and must be
+        # judged against column 1's bounds, not column 2's.
+        outlier = _FakeNode("o", _bbox(420, 0, 460, 40), text="stray")
+        page = _FakePage(col1 + col2 + [outlier])
+        _run_up_to_offarea_filter(page, column_count=2, split_x=500)
+        assert outlier not in page.children
+        assert all(n in page.children for n in col1 + col2)
+
+    def test_ratio_exactly_at_threshold_is_kept_not_dropped(self):
+        node = _FakeNode("edge", _bbox(0, 0, 10, 10), text="edge")
+        page = _FakePage([node])
+        fixed_bounds = {1: _AreaBounds(5, 20, 0, 20)}  # ratio == 0.5 exactly
+        with patch("run_pipeline._main_text_area", return_value=fixed_bounds):
+            collection = _run_up_to_offarea_filter(page)
+        assert node in page.children
+        assert collection._offarea_filter_dropped == []
