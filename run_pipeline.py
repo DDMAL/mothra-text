@@ -22,6 +22,7 @@ import logging
 import statistics
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -216,6 +217,178 @@ def _music_overlap_ratio(node_bbox, music_box: list[float]) -> float:
     return intersection / line_area if line_area > 0 else 0.0
 
 
+def _row_groups(nodes: list, overlap_threshold: float = 0.5) -> list[list]:
+    """Group nodes into rows by y-extent overlap.
+
+    A node joins the running group if its overlap with the group's y-extent
+    covers at least ``overlap_threshold`` of the smaller of the two heights
+    -- the same rule ``fuse_colinear_segments`` uses to decide co-linear
+    segments (``steps/column_clustering.py``), so a "row" here means the
+    same thing a fused line will eventually mean, just computed earlier and
+    independently (this filter must run before fusion -- see mothra-text#53).
+    """
+    if not nodes:
+        return []
+    sorted_nodes = sorted(nodes, key=lambda nd: nd.bbox.ymin)
+    groups = [[sorted_nodes[0]]]
+    group_ymin, group_ymax = sorted_nodes[0].bbox.ymin, sorted_nodes[0].bbox.ymax
+    for nd in sorted_nodes[1:]:
+        nd_height = nd.bbox.ymax - nd.bbox.ymin
+        group_height = group_ymax - group_ymin
+        overlap_h = max(
+            0, min(group_ymax, nd.bbox.ymax) - max(group_ymin, nd.bbox.ymin)
+        )
+        min_height = min(nd_height, group_height) or 1
+        if overlap_h / min_height >= overlap_threshold:
+            groups[-1].append(nd)
+            group_ymin = min(group_ymin, nd.bbox.ymin)
+            group_ymax = max(group_ymax, nd.bbox.ymax)
+        else:
+            groups.append([nd])
+            group_ymin, group_ymax = nd.bbox.ymin, nd.bbox.ymax
+    return groups
+
+
+def _union_width(
+    intervals: list[tuple[float, float]], lo: float, hi: float
+) -> float:
+    """Total length covered by ``intervals``, clipped to ``[lo, hi]`` and merged.
+
+    Unlike an outer bounding span (``max(b) - min(a)``), this does not count
+    gaps between intervals. That distinction matters: an outer-span version
+    of this filter let a stray, unrelated box inflate a row's apparent width
+    just by sharing a y-band with a real line (found during development on
+    CH-Fco Ms. 2 009v -- see mothra-text#53).
+    """
+    clipped = []
+    for a, b in intervals:
+        a2, b2 = max(a, lo), min(b, hi)
+        if b2 > a2:
+            clipped.append((a2, b2))
+    clipped.sort()
+    total = 0.0
+    cur_a = cur_b = None
+    for a, b in clipped:
+        if cur_a is None:
+            cur_a, cur_b = a, b
+        elif a <= cur_b:
+            cur_b = max(cur_b, b)
+        else:
+            total += cur_b - cur_a
+            cur_a, cur_b = a, b
+    if cur_a is not None:
+        total += cur_b - cur_a
+    return total
+
+
+@dataclass
+class _AreaBounds:
+    """Main chant text area for one column. Either axis may be unconstrained
+    (both ends None) when there wasn't enough evidence to set it -- see
+    _main_text_area."""
+
+    xmin: float | None
+    xmax: float | None
+    ymin: float | None
+    ymax: float | None
+
+
+def _main_text_area(
+    nodes: list,
+    split_x,
+    x_reference_ratio: float = 0.6,
+    y_reference_ratio: float = 0.35,
+) -> dict[int, _AreaBounds]:
+    """Compute the main chant text area per column from BLLA line geometry.
+
+    A row (see _row_groups) whose members' combined x-coverage is wide
+    relative to the page's widest row anchors the x-extent; a row whose
+    coverage relative to that x-extent is wide enough anchors the y-extent.
+    Judging rows by combined coverage rather than any single box's width
+    means a real line BLLA fragmented into several small boxes is recognized
+    by what its pieces look like together, not what any one of them looks
+    like alone -- required because on several real folios (CH-Fco Ms. 2
+    005r, 008r, 009r, 032r, 040v) most real lines are fragmented this way,
+    and no single fragment is ever wide enough on its own. See mothra-text#53.
+
+    Returns a dict keyed by column (1, 2) present among ``nodes``; an axis
+    of a column's bounds is None when there wasn't enough evidence to set it
+    (no qualifying row), in which case _area_overlap_ratio treats that axis
+    as unconstrained rather than penalizing every node on it.
+    """
+    def _col(node):
+        return 1 if (split_x is None or node.bbox.xmin < split_x) else 2
+
+    result: dict[int, _AreaBounds] = {}
+    for col in (1, 2):
+        col_nodes = [nd for nd in nodes if _col(nd) == col]
+        if not col_nodes:
+            continue
+
+        row_stats = []
+        for row in _row_groups(col_nodes):
+            intervals = [(nd.bbox.xmin, nd.bbox.xmax) for nd in row]
+            raw_width = _union_width(intervals, float("-inf"), float("inf"))
+            row_stats.append({
+                "intervals": intervals,
+                "raw_width": raw_width,
+                "xmin": min(nd.bbox.xmin for nd in row),
+                "xmax": max(nd.bbox.xmax for nd in row),
+                "ymin": min(nd.bbox.ymin for nd in row),
+                "ymax": max(nd.bbox.ymax for nd in row),
+            })
+
+        max_raw_width = max(rs["raw_width"] for rs in row_stats)
+        x_ref_rows = [
+            rs for rs in row_stats
+            if rs["raw_width"] >= x_reference_ratio * max_raw_width
+        ]
+        if not x_ref_rows:
+            result[col] = _AreaBounds(None, None, None, None)
+            continue
+
+        main_xmin = statistics.median(rs["xmin"] for rs in x_ref_rows)
+        main_xmax = statistics.median(rs["xmax"] for rs in x_ref_rows)
+        x_span = main_xmax - main_xmin
+
+        main_ymin = main_ymax = None
+        for rs in row_stats:
+            coverage = _union_width(rs["intervals"], main_xmin, main_xmax)
+            if x_span > 0 and coverage / x_span >= y_reference_ratio:
+                main_ymin = (
+                    rs["ymin"] if main_ymin is None else min(main_ymin, rs["ymin"])
+                )
+                main_ymax = (
+                    rs["ymax"] if main_ymax is None else max(main_ymax, rs["ymax"])
+                )
+
+        result[col] = _AreaBounds(main_xmin, main_xmax, main_ymin, main_ymax)
+    return result
+
+
+def _area_overlap_ratio(node_bbox, bounds: _AreaBounds) -> float:
+    """Fraction of node_bbox's own area that overlaps the main text area.
+
+    Either axis of ``bounds`` may be unconstrained (both ends None -- see
+    _main_text_area), in which case that axis contributes full overlap
+    rather than penalizing the node for a bound the page didn't have enough
+    evidence to establish.
+    """
+    lx0, ly0 = node_bbox.xmin, node_bbox.ymin
+    lx1, ly1 = node_bbox.xmax, node_bbox.ymax
+    xmin = bounds.xmin if bounds.xmin is not None else lx0
+    xmax = bounds.xmax if bounds.xmax is not None else lx1
+    ymin = bounds.ymin if bounds.ymin is not None else ly0
+    ymax = bounds.ymax if bounds.ymax is not None else ly1
+    ix0, iy0 = max(lx0, xmin), max(ly0, ymin)
+    ix1, iy1 = min(lx1, xmax), min(ly1, ymax)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    intersection = (ix1 - ix0) * (iy1 - iy0)
+    line_area = (lx1 - lx0) * (ly1 - ly0)
+    return intersection / line_area if line_area > 0 else 0.0
+
+
 def run(
     image_path: str,
     folio: str | None = None,
@@ -237,6 +410,8 @@ def run(
     music_overlap_threshold: float = 0.30,
     skip_misdetected_lines: bool = True,
     misdetect_width_ratio: float = 0.35,
+    drop_offarea_boxes: bool = True,
+    area_keep_threshold: float = 0.50,
 ) -> tuple[Collection, dict[str, str]]:
     """Run the PoC pipeline on one folio image.
 
@@ -317,6 +492,18 @@ def run(
         misdetect_width_ratio: Maximum box width, as a fraction of the
             page's typical text-line width, for a line to be eligible
             for that skip (default 0.35).
+        drop_offarea_boxes: When True (default), a line lying almost
+            entirely outside the main chant text area -- folio numbers,
+            running heads, marginal notes -- is dropped **before** Stage 4
+            (NW allocation) and fusion, so it cannot consume a GT slot or
+            be silently absorbed into a real line during fusion. Like
+            ``skip_misdetected_lines`` this is self-computed from the
+            page's own line geometry, so it also protects CLI and
+            ``run_chain.py`` runs, unlike the ``music_boxes`` filter above.
+            See ``_main_text_area`` for how the area is derived.
+        area_keep_threshold: Minimum fraction of a line's own area that
+            must overlap the main text area for the line to be kept
+            (default 0.50).
 
     Returns:
         Tuple of (collection, manifest) where collection has word-level
@@ -411,6 +598,38 @@ def run(
             ]
         else:
             collection._music_filter_dropped = []
+
+        # Pre-Stage-4: drop lines lying (almost) entirely outside the main
+        # chant text area before fusion -- see _main_text_area's docstring
+        # and mothra-text#53 for why this must run here rather than as a
+        # post-fusion veto.
+        if drop_offarea_boxes:
+            area_bounds = _main_text_area(page.children, split_x)
+            kept, dropped_info = [], []
+            for node in page.children:
+                col = 1 if (split_x is None or node.bbox.xmin < split_x) else 2
+                bounds = area_bounds.get(col, _AreaBounds(None, None, None, None))
+                ratio = _area_overlap_ratio(node.bbox, bounds)
+                if ratio < area_keep_threshold:
+                    dropped_info.append((node, ratio))
+                    logger.info(
+                        "folio %s: pre-NW drop — line bbox [%d,%d,%d,%d]"
+                        " lies outside the main text area (overlap=%.2f)",
+                        folio or "?",
+                        node.bbox.xmin, node.bbox.ymin,
+                        node.bbox.xmax, node.bbox.ymax,
+                        ratio,
+                    )
+                else:
+                    kept.append(node)
+            page.children = kept
+            collection._offarea_filter_dropped = [
+                {"bbox": [n.bbox.xmin, n.bbox.ymin, n.bbox.xmax, n.bbox.ymax],
+                 "text": n.text or "", "ratio": round(ratio, 3)}
+                for n, ratio in dropped_info
+            ]
+        else:
+            collection._offarea_filter_dropped = []
 
         # Stage 4: Line fusion + chant allocation (or OCR-only)
         node_ocr = {node.label: (node.text or "") for node in page.children}
@@ -786,6 +1005,21 @@ def main() -> None:
              "boxes.",
     )
     parser.add_argument(
+        "--no-drop-offarea-boxes", action="store_true", default=False,
+        help="Allocate Cantus text to every detected line, including boxes "
+             "lying almost entirely outside the main chant text area "
+             "(folio numbers, running heads, marginal notes). By default "
+             "such boxes are dropped before fusion so they cannot consume "
+             "or shift a line's words.",
+    )
+    parser.add_argument(
+        "--area-keep-threshold",
+        type=float, default=0.50, metavar="FLOAT",
+        help="Minimum fraction of a line's own area that must overlap the "
+             "main chant text area for the line to be kept (default: 0.50). "
+             "Higher values drop more boxes.",
+    )
+    parser.add_argument(
         "--prev-folio-state", metavar="PATH", default=None,
         help="JSON sidecar from the previous folio run. Provides post-77 "
              "continuation words for chants that span two folios.",
@@ -923,6 +1157,8 @@ def main() -> None:
         padding=args.padding,
         skip_misdetected_lines=not args.no_skip_misdetected_lines,
         misdetect_width_ratio=args.misdetect_width_ratio,
+        drop_offarea_boxes=not args.no_drop_offarea_boxes,
+        area_keep_threshold=args.area_keep_threshold,
     )
     _summarise(collection)
 
