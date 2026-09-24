@@ -12,6 +12,7 @@ count metrics; that divergence is intentional.
 """
 
 import logging
+import threading
 
 import cv2
 from kraken import blla
@@ -30,6 +31,55 @@ except ImportError:
             raise NotImplementedError
 
 logger = logging.getLogger(__name__)
+
+
+# The BLLA model, loaded once per process rather than once per page.
+#
+# blla.segment(model=None) loads kraken's bundled default INSIDE the call --
+# `model = vgsl.TorchVGSLModel.load_model(resources.files('kraken')
+# .joinpath('blla.mlmodel'))` -- so every page was paying a full model load
+# before any inference happened. _default_segmentation_model() reproduces
+# that exact resolution once and hands the result to blla.segment(), which
+# then skips its own load.
+#
+# Lock discipline matches kraken_recognition.py's: held across the whole
+# segment() call. torch modules in eval mode are usually safe to share, but
+# blla.segment() is not documented as thread-safe and does touch the model
+# object, and serializing costs nothing in the deployment this serves
+# (text-service: replicas=1, no --workers, one image at a time).
+_SEGMENTER_CACHE: dict[str, object] = {}
+_SEGMENTER_LOCK = threading.Lock()
+
+
+def _default_segmentation_model():
+    """kraken's bundled BLLA model, memoized.
+
+    Returns None on any failure, which makes the caller fall through to
+    blla.segment(model=None) -- i.e. exactly the previous behaviour, loading
+    per page. This is a performance optimization reaching into another
+    project's resource layout, so it must degrade rather than break if a
+    kraken upgrade moves things.
+    """
+    cached = _SEGMENTER_CACHE.get("default")
+    if cached is not None:
+        return cached
+    try:
+        from importlib import resources
+
+        from kraken.lib import vgsl
+
+        model = vgsl.TorchVGSLModel.load_model(
+            resources.files("kraken").joinpath("blla.mlmodel")
+        )
+    except Exception:
+        logger.warning(
+            "KrakenSegmentation: could not pre-load kraken's default BLLA model; "
+            "falling back to loading it per page",
+            exc_info=True,
+        )
+        return None
+    _SEGMENTER_CACHE["default"] = model
+    return model
 
 
 class KrakenSegmentation(_PipelineStepBase):
@@ -65,11 +115,15 @@ class KrakenSegmentation(_PipelineStepBase):
 
     def run(self, collection: Collection) -> Collection:
         results = []
+        # A custom model was already loaded once in __init__; only the
+        # default needs the process-wide cache.
+        model = self._model if self._model is not None else _default_segmentation_model()
         for page in collection:
             # HTRflow loads images as BGR (cv2.imread); convert to RGB for PIL.
             bgr = page.image
             pil_img = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-            seg = blla.segment(pil_img, model=self._model, device=self.device)
+            with _SEGMENTER_LOCK:
+                seg = blla.segment(pil_img, model=model, device=self.device)
 
             polygons = [
                 line.boundary
