@@ -567,17 +567,20 @@ def run(
         if column_count >= 2 and split_x is not None:
             _split_spanning_nodes_in_tree(page, split_x)
 
-        # Stage 3: Kraken HTR text recognition
-        logger.info(
-            "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
-        )
-        collection = KrakenRecognition(
-            model=recognition_model,
-            device=device,
-            allow_stub=(recognition_model is None),
-        ).run(collection)
-
-        # Pre-Stage-4: drop lines overlapping music regions before NW allocation
+        # Pre-Stage-3: drop lines overlapping music regions.
+        #
+        # This and the off-area filter below used to run AFTER Stage 3, which
+        # meant every line they discard had already paid a full HTR forward
+        # pass. Both decide purely on node.bbox -- set by segmentation and the
+        # span-split above, never by OCR -- so running them here skips those
+        # passes outright. On a chant page that is a real fraction of the
+        # total, since BLLA over-segments around neume notation (which is
+        # exactly what the music filter then throws away).
+        #
+        # Consequence to be aware of: the "text" recorded in the dropped-line
+        # payloads below is now always "" -- there is no transcription yet at
+        # this point. Nothing consumes it (text-service reads only the bbox
+        # and the count); the field is kept so the payload shape is unchanged.
         if music_boxes:
             kept, dropped_nodes = [], []
             for node in page.children:
@@ -602,10 +605,12 @@ def run(
         else:
             collection._music_filter_dropped = []
 
-        # Pre-Stage-4: drop lines lying (almost) entirely outside the main
-        # chant text area before fusion -- see _main_text_area's docstring
-        # and mothra-text#53 for why this must run here rather than as a
-        # post-fusion veto.
+        # Pre-Stage-3: drop lines lying (almost) entirely outside the main
+        # chant text area -- see _main_text_area's docstring and
+        # mothra-text#53 for why this must run before fusion rather than
+        # as a post-fusion veto. Kept in this order relative to the music
+        # filter above: _main_text_area is computed from whichever nodes
+        # survive that one, so swapping them would change what it bounds.
         if drop_offarea_boxes:
             area_bounds = _main_text_area(page.children, split_x)
             kept, dropped_info = [], []
@@ -633,6 +638,16 @@ def run(
             ]
         else:
             collection._offarea_filter_dropped = []
+
+        # Stage 3: Kraken HTR text recognition
+        logger.info(
+            "Stage 3: Kraken HTR recognition (model=%r)", recognition_model
+        )
+        collection = KrakenRecognition(
+            model=recognition_model,
+            device=device,
+            allow_stub=(recognition_model is None),
+        ).run(collection)
 
         # Stage 4: Line fusion + chant allocation (or OCR-only)
         node_ocr = {node.label: (node.text or "") for node in page.children}
