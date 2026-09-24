@@ -347,9 +347,14 @@ def _run_up_to_offarea_filter(
     Same technique as _run_up_to_music_filter: mock Stages 1-3 and
     Collection() to hand back `page` untouched (with music_boxes left at
     its None default, so that earlier filter is a no-op), and let
-    fuse_colinear_segments -- the first call after both pre-Stage-4 filters
+    fuse_colinear_segments -- the first call after both pre-Stage-3 filters
     -- raise a sentinel so the real filter code's mutations on `page`/
     `collection` can be inspected without mocking the rest of the pipeline.
+
+    Note the filters now run BEFORE Stage 3, so KrakenRecognition being
+    mocked out means the fake nodes keep whatever text the fixture gave
+    them -- which is why the dropped-line `text` assertions below still
+    hold even though the real pipeline now records "" there.
     """
     fake_collection = _FakeCollection(page)
     with patch("run_pipeline.Collection", return_value=fake_collection), \

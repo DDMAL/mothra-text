@@ -14,6 +14,7 @@ from the CLI).
 """
 
 import logging
+import threading
 
 import cv2
 from PIL import Image
@@ -31,6 +32,37 @@ except ImportError:
             raise NotImplementedError
 
 logger = logging.getLogger(__name__)
+
+
+# Recognition models, keyed by (model, device). models.load_any() reads and
+# deserializes a .mlmodel from disk, and it was being called once per run()
+# -- i.e. once per page, and once per folio inside text-service's /batch-run
+# loop, so an N-folio batch paid N loads of the same file. The model is
+# read-only once loaded, so there is nothing per-request about it.
+#
+# _RECOGNIZER_LOCK guards BOTH the cache and inference, and the second half
+# is the important one: kraken's TorchSeqRecognizer keeps per-inference state
+# on the object (it stashes the network outputs on itself between calls), so
+# two threads sharing one recognizer can interleave and corrupt each other's
+# transcription. Serializing is close to free here -- text-service runs
+# replicas=1 with no --workers, and mothra's predict task calls it once per
+# image, sequentially -- and it is the only way a shared instance is safe.
+_RECOGNIZER_CACHE: dict[tuple[str, str], object] = {}
+_RECOGNIZER_LOCK = threading.Lock()
+
+
+def _load_recognizer(load_any, model: str, device: str):
+    """models.load_any(), memoized per (model, device). Callers must hold
+    _RECOGNIZER_LOCK for the returned object's lifetime of use."""
+    key = (str(model), str(device))
+    recognizer = _RECOGNIZER_CACHE.get(key)
+    if recognizer is None:
+        logger.info("KrakenRecognition: loading model %r on device=%r", model, device)
+        recognizer = load_any(model, device=device)
+        _RECOGNIZER_CACHE[key] = recognizer
+    else:
+        logger.info("KrakenRecognition: reusing cached model %r on device=%r", model, device)
+    return recognizer
 
 
 class KrakenRecognition(_PipelineStepBase):
@@ -93,18 +125,26 @@ class KrakenRecognition(_PipelineStepBase):
         from kraken.containers import BBoxLine, Segmentation
         from kraken.lib import models
 
-        logger.info(
-            "KrakenRecognition: loading model %r on device=%r",
-            self.model,
-            self.device,
-        )
-        nn = models.load_any(self.model, device=self.device)
-
         nodes = list(collection.active_leaves())
         if not nodes:
             logger.warning("KrakenRecognition: no active leaf nodes; nothing to recognise")
             return collection
 
+        # Held across the whole page, not re-acquired per line: the
+        # recognizer is stateful between rpred calls (see _RECOGNIZER_CACHE),
+        # so releasing it mid-page would let another request's lines
+        # interleave with this one's.
+        with _RECOGNIZER_LOCK:
+            nn = _load_recognizer(models.load_any, self.model, self.device)
+            results = self._recognise(rpred, Segmentation, BBoxLine, nn, nodes)
+
+        collection.update(results)
+        logger.info("KrakenRecognition: recognised %d lines", len(nodes))
+        return collection
+
+    def _recognise(self, rpred, Segmentation, BBoxLine, nn, nodes):
+        """The per-line recognition loop. Split out of run() only so the
+        lock scope above reads as one statement."""
         results = []
         for node in nodes:
             # node.image is a BGR numpy array (HTRflow convention).
@@ -150,7 +190,4 @@ class KrakenRecognition(_PipelineStepBase):
             logger.debug(
                 "KrakenRecognition: %s → %r (conf=%.3f)", node.label, text, conf
             )
-
-        collection.update(results)
-        logger.info("KrakenRecognition: recognised %d lines", len(nodes))
-        return collection
+        return results
